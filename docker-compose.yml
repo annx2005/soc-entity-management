@@ -1,0 +1,153 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc:soc_password@postgresql:5432/soc_entity_management
+      REDIS_URL: redis://redis:6379/0
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: neo4j_password
+      TENANT_ID_DEFAULT: default
+      JWT_SECRET_KEY: local-dev-change-me
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_RAW_EVENTS_TOPIC: soc.raw-events.v1
+      KAFKA_NORMALIZED_EVENTS_TOPIC: soc.normalized-events.v1
+      KAFKA_OCSF_EVENTS_TOPIC: soc.ocsf-events.v1
+      KAFKA_DEAD_LETTER_TOPIC: soc.ingest-dlq.v1
+      KAFKA_INGESTION_GROUP_ID: soc-ingestion-workers
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./data:/data:ro
+      - ./wazuh-archives.jsonl:/wazuh-archives.jsonl:ro
+    depends_on:
+      postgresql:
+        condition: service_started
+      redis:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      kafka-init-topics:
+        condition: service_completed_successfully
+
+  kafka-ingestion-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["python", "-m", "app.workers.kafka_ingestion_worker"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc:soc_password@postgresql:5432/soc_entity_management
+      REDIS_URL: redis://redis:6379/0
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: neo4j_password
+      TENANT_ID_DEFAULT: default
+      JWT_SECRET_KEY: local-dev-change-me
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_RAW_EVENTS_TOPIC: soc.raw-events.v1
+      KAFKA_NORMALIZED_EVENTS_TOPIC: soc.normalized-events.v1
+      KAFKA_OCSF_EVENTS_TOPIC: soc.ocsf-events.v1
+      KAFKA_DEAD_LETTER_TOPIC: soc.ingest-dlq.v1
+      KAFKA_INGESTION_GROUP_ID: soc-ingestion-workers
+    volumes:
+      - ./backend/app:/app/app
+      - ./data:/data:ro
+      - ./wazuh-archives.jsonl:/wazuh-archives.jsonl:ro
+    depends_on:
+      postgresql:
+        condition: service_started
+      redis:
+        condition: service_started
+      neo4j:
+        condition: service_started
+      kafka-init-topics:
+        condition: service_completed_successfully
+
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: soc
+      POSTGRES_PASSWORD: soc_password
+      POSTGRES_DB: soc_entity_management
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  kafka:
+    image: apache/kafka:3.9.1
+    user: "0:0"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    ports:
+      - "19092:19092"
+    volumes:
+      - kafka_data:/tmp/kafka-logs
+
+  kafka-init-topics:
+    image: apache/kafka:3.9.1
+    depends_on:
+      - kafka
+    command:
+      - /bin/bash
+      - -ec
+      - |
+        for attempt in {1..30}; do
+          if /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; then
+            break
+          fi
+          sleep 2
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic soc.raw-events.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic soc.normalized-events.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic soc.ocsf-events.v1 --partitions 6 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic soc.ingest-dlq.v1 --partitions 3 --replication-factor 1
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    ports:
+      - "18080:8080"
+    depends_on:
+      kafka-init-topics:
+        condition: service_completed_successfully
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/neo4j_password
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
+volumes:
+  postgres_data:
+  neo4j_data:
+  kafka_data:

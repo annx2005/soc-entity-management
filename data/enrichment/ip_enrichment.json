@@ -1,0 +1,26 @@
+{
+  "140.82.113.3": {
+    "asn": "AS36459",
+    "country": "US",
+    "provider": "offline-demo",
+    "reputation": "benign"
+  },
+  "198.51.100.23": {
+    "asn": "AS64501",
+    "country": "US",
+    "provider": "offline-demo",
+    "reputation": "suspicious"
+  },
+  "203.0.113.77": {
+    "asn": "AS64502",
+    "country": "SG",
+    "provider": "offline-demo",
+    "reputation": "scanner"
+  },
+  "8.8.8.8": {
+    "asn": "AS15169",
+    "country": "US",
+    "provider": "offline-demo",
+    "reputation": "benign"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "dataset": "fake-multitenant-wazuh",
+  "purpose": "Demo tenant isolation for SOC entity management MVP",
+  "shared_iocs": {
+    "domains": [
+      "update-check.example",
+      "github.com"
+    ],
+    "file_hashes": [
+      "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+    ],
+    "ips": [
+      "198.51.100.23",
+      "8.8.8.8",
+      "203.0.113.77",
+      "140.82.113.3"
+    ]
+  },
+  "tenants": [
+    {
+      "event_types": {
+        "1": 6,
+        "22": 3,
+        "3": 6,
+        "4624": 3,
+        "4625": 3,
+        "vulnerability": 3,
+        "wazuh_alert": 3
+      },
+      "hosts": [
+        "acme-dc-01",
+        "acme-srv-01",
+        "acme-ws-01"
+      ],
+      "records": 27,
+      "tenant_id": "tenant-acme"
+    },
+    {
+      "event_types": {
+        "1": 6,
+        "22": 5,
+        "3": 6,
+        "4624": 3,
+        "4625": 1,
+        "vulnerability": 3,
+        "wazuh_alert": 3
+      },
+      "hosts": [
+        "globex-app-02",
+        "globex-dc-01",
+        "globex-ws-07"
+      ],
+      "records": 27,
+      "tenant_id": "tenant-globex"
+    }
+  ]
+}
