@@ -10,7 +10,7 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: neo4j_password
       TENANT_ID_DEFAULT: default
-      JWT_SECRET_KEY: local-dev-change-me
+      JWT_SECRET_KEY: local-dev-change-me-32-bytes-min
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_RAW_EVENTS_TOPIC: soc.raw-events.v1
@@ -47,7 +47,7 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: neo4j_password
       TENANT_ID_DEFAULT: default
-      JWT_SECRET_KEY: local-dev-change-me
+      JWT_SECRET_KEY: local-dev-change-me-32-bytes-min
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_RAW_EVENTS_TOPIC: soc.raw-events.v1

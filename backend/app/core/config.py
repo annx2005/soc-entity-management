@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "SOC Entity Management"
     environment: str = "local"
     tenant_id_default: str = "default"
-    jwt_secret_key: str = "local-dev-change-me"
+    jwt_secret_key: str = "local-dev-change-me-32-bytes-min"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
