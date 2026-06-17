@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     kafka_ocsf_events_topic: str = "soc.ocsf-events.v1"
     kafka_dead_letter_topic: str = "soc.ingest-dlq.v1"
     kafka_ingestion_group_id: str = "soc-ingestion-workers"
+    kafka_graph_group_id: str = "soc-graph-workers"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

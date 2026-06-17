@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+import asyncio
+import uuid
+from collections import defaultdict
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.entities import router as entities_router
+from app.auth.dependencies import TenantContext, get_tenant_context
+from app.entities import extract_entities
+from app.graph.constants import label_for_entity_type, validate_relationship_type
+from app.graph.dependencies import get_graph_service
+from app.graph.inference import infer_relationships
+from app.graph.kafka_service import process_ocsf_event_message
+from app.graph.schemas import EntityResponse, GraphResponse
+from app.graph.service import GraphService
+from app.ingestion.kafka_messages import OCSFEventMessage
+from app.normalization.normalizer import normalize_event
+from app.ocsf.schemas import OCSFEvent
+
+
+TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def base_record(event_id: str, eventdata: dict) -> dict:
+    return {
+        "id": "evt-graph-1",
+        "tenant_id": "tenant-acme",
+        "timestamp": "2026-07-02T14:50:01.005+0000",
+        "agent": {"name": "Xuan-An", "ip": "192.168.0.119"},
+        "data": {
+            "win": {
+                "system": {
+                    "eventID": event_id,
+                    "systemTime": "2026-07-02T14:50:00.000Z",
+                    "computer": "Xuan-An",
+                },
+                "eventdata": eventdata,
+            }
+        },
+    }
+
+
+def test_graph_allowlists_reject_unknown_dynamic_values() -> None:
+    assert label_for_entity_type(extract_entities(auth_event())[0].type) == "User"
+    assert validate_relationship_type("LOGGED_IN_TO") == "LOGGED_IN_TO"
+
+    with pytest.raises(ValueError):
+        validate_relationship_type("MATCH (n) DETACH DELETE n")
+
+
+def test_infer_network_relationships_uses_src_and_dst_ip_roles() -> None:
+    event = normalize_event(
+        base_record(
+            "3",
+            {
+                "user": r"NT AUTHORITY\SYSTEM",
+                "sourceIp": "172.20.208.1",
+                "destinationIp": "224.0.0.251",
+                "image": r"C:\Program Files\App\agent.exe",
+            },
+        )
+    )
+    entities = extract_entities(event)
+
+    relationships = infer_relationships(event, entities)
+
+    assert {relationship.relationship_type for relationship in relationships} == {"USED_IP", "CONNECTED_TO"}
+    used_ip = next(relationship for relationship in relationships if relationship.relationship_type == "USED_IP")
+    connected_to = next(relationship for relationship in relationships if relationship.relationship_type == "CONNECTED_TO")
+    ip_by_id = {entity.id: entity.value for entity in entities}
+    assert ip_by_id[used_ip.to_id] == "172.20.208.1"
+    assert ip_by_id[connected_to.to_id] == "224.0.0.251"
+
+
+def test_infer_all_initial_relationship_rules() -> None:
+    success = auth_event("4624")
+    failure = auth_event("4625")
+    dns = normalize_event(
+        base_record(
+            "22",
+            {
+                "user": r"Xuan-An\XuanAn",
+                "queryName": "GitHub.COM.",
+                "queryResults": "::ffff:20.205.243.166;",
+                "image": r"C:\Windows\System32\curl.exe",
+            },
+        )
+    )
+    process = normalize_event(
+        base_record(
+            "1",
+            {
+                "user": r"Xuan-An\XuanAn",
+                "image": r"C:\Windows\System32\curl.exe",
+                "commandLine": r'"C:\Windows\system32\curl.exe" https://github.com',
+                "hashes": "SHA256=642A07EEEA4D3132426E673FB3C88BE8CEAD3D03CA1F019C7E7D0000ED2122BE",
+            },
+        )
+    )
+
+    assert [rel.relationship_type for rel in infer_relationships(success, extract_entities(success))] == ["LOGGED_IN_TO"]
+    assert [rel.relationship_type for rel in infer_relationships(failure, extract_entities(failure))] == ["FAILED_LOGON_TO"]
+    assert {rel.relationship_type for rel in infer_relationships(dns, extract_entities(dns))} == {"RESOLVED_DOMAIN", "RESOLVED_TO"}
+    assert {rel.relationship_type for rel in infer_relationships(process, extract_entities(process))} == {"EXECUTED_ON", "HAS_HASH", "RAN_AS"}
+
+
+def test_graph_service_is_idempotent_with_unique_event_evidence() -> None:
+    event = auth_event()
+    repo = FakeGraphRepository()
+    service = GraphService(repo)
+
+    first = asyncio.run(service.process_event(event))
+    second = asyncio.run(service.process_event(event))
+
+    assert first.entities == second.entities
+    assert len(repo.events) == 1
+    assert len(repo.entities) == first.entities
+    assert len(repo.observations) == first.observations
+    assert len(repo.relationship_facts) == 1
+    assert next(iter(repo.relationship_facts.values()))["count"] == 1
+
+
+def test_graph_service_caps_unique_sample_evidence_refs() -> None:
+    repo = FakeGraphRepository()
+    service = GraphService(repo)
+
+    for index in range(60):
+        event = auth_event()
+        event.event_id = f"evt-{index:03d}"
+        asyncio.run(service.process_event(event))
+
+    fact = next(iter(repo.relationship_facts.values()))
+    assert fact["count"] == 60
+    assert len(fact["sample_evidence_refs"]) == 50
+    assert fact["sample_evidence_refs"][0] == "evt-010"
+    assert fact["sample_evidence_refs"][-1] == "evt-059"
+
+
+def test_process_ocsf_event_message_runs_graph_flow() -> None:
+    event = auth_event()
+    message = OCSFEventMessage(
+        source_message_id="raw-1",
+        batch_id=1,
+        event_id=event.event_id,
+        tenant_id=event.tenant_id,
+        class_uid=event.class_uid,
+        class_name=event.class_name,
+        activity_id=event.activity_id,
+        activity_name=event.activity_name,
+        ocsf_event=event.model_dump(mode="json"),
+    )
+    repo = FakeGraphRepository()
+    service = GraphService(repo)
+
+    result = asyncio.run(process_ocsf_event_message(message, service))
+
+    assert result.status == "processed"
+    assert len(repo.events) == 1
+
+
+def test_entities_api_uses_tenant_context_and_returns_404_cross_tenant() -> None:
+    client = graph_test_client(
+        FakeApiGraphService(
+            entities={
+                TENANT_ID: {
+                    "entity-a": EntityResponse(
+                        id="entity-a",
+                        tenant_id=TENANT_ID,
+                        entity_type="ip",
+                        value="1.2.3.4",
+                    )
+                }
+            }
+        )
+    )
+
+    list_response = client.get("/api/entities", headers={"Authorization": "Bearer test"})
+    detail_response = client.get("/api/entities/entity-a", headers={"Authorization": "Bearer test"})
+    cross_tenant_response = client.get("/api/entities/entity-b", headers={"Authorization": "Bearer test"})
+
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["id"] == "entity-a"
+    assert detail_response.status_code == 200
+    assert cross_tenant_response.status_code == 404
+
+
+def test_entities_api_rejects_platform_scope() -> None:
+    client = graph_test_client(FakeApiGraphService(), platform=True)
+
+    response = client.get("/api/entities", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 403
+
+
+def auth_event(event_id: str = "4624") -> OCSFEvent:
+    process_name = r"C:\Windows\System32\services.exe" if event_id == "4624" else r"C:\Windows\System32\svchost.exe"
+    return normalize_event(
+        base_record(
+            event_id,
+            {"targetUserName": "XuanAn", "ipAddress": "127.0.0.1", "processName": process_name},
+        )
+    )
+
+
+class FakeGraphRepository:
+    def __init__(self) -> None:
+        self.events: dict[str, OCSFEvent] = {}
+        self.entities = {}
+        self.observations = set()
+        self.relationship_facts = {}
+        self.evidence_links = defaultdict(set)
+
+    async def ensure_schema(self) -> None:
+        return None
+
+    async def upsert_event(self, event: OCSFEvent) -> str:
+        self.events[event.event_id] = event
+        return event.event_id
+
+    async def upsert_entity(self, entity) -> None:
+        self.entities[entity.id] = entity
+
+    async def upsert_observation(self, event: OCSFEvent, entity) -> str:
+        field_path = entity.properties.get("source_field") or "unknown"
+        key = (event.tenant_id, event.event_id, entity.id, field_path)
+        self.observations.add(key)
+        return ":".join(key)
+
+    async def upsert_relationship(self, tenant_id: str, candidate) -> None:
+        fact_key = (tenant_id, candidate.relationship_type, candidate.from_id, candidate.to_id)
+        fact = self.relationship_facts.setdefault(
+            fact_key,
+            {"count": 0, "sample_evidence_refs": []},
+        )
+        if candidate.evidence_ref in self.evidence_links[fact_key]:
+            return
+        self.evidence_links[fact_key].add(candidate.evidence_ref)
+        fact["count"] += 1
+        fact["sample_evidence_refs"] = (fact["sample_evidence_refs"] + [candidate.evidence_ref])[-50:]
+
+
+class FakeApiGraphService:
+    def __init__(self, entities: dict[str, dict[str, EntityResponse]] | None = None) -> None:
+        self.entities = entities or {}
+
+    async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100):
+        return list(self.entities.get(tenant_id, {}).values())[:limit]
+
+    async def get_entity(self, tenant_id: str, entity_id: str):
+        return self.entities.get(tenant_id, {}).get(entity_id)
+
+    async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100):
+        return []
+
+    async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100):
+        return []
+
+    async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200):
+        return GraphResponse(nodes=[], edges=[])
+
+
+def graph_test_client(graph_service: FakeApiGraphService, *, platform: bool = False) -> TestClient:
+    app = FastAPI()
+    app.include_router(entities_router)
+
+    def override_context() -> TenantContext:
+        return TenantContext(
+            account_id=uuid.uuid4(),
+            tenant_id=None if platform else uuid.UUID(TENANT_ID),
+            tenant_slug=None if platform else "tenant-a",
+            email="analyst@example.com",
+            role="analyst",
+            scope="platform" if platform else "tenant",
+        )
+
+    def override_graph_service() -> FakeApiGraphService:
+        return graph_service
+
+    app.dependency_overrides[get_tenant_context] = override_context
+    app.dependency_overrides[get_graph_service] = override_graph_service
+    return TestClient(app)
