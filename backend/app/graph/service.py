@@ -4,6 +4,7 @@ from typing import Protocol
 
 from app.entities.extractor import extract_entities
 from app.entities.schemas import Entity
+from app.enrichment.service import EnrichmentService
 from app.graph.inference import infer_relationships
 from app.graph.repository import GraphRepository
 from app.graph.schemas import EntityResponse, EvidenceResponse, GraphIngestResult, GraphResponse, RelationshipResponse
@@ -43,8 +44,9 @@ class GraphRepositoryProtocol(Protocol):
 
 
 class GraphService:
-    def __init__(self, repository: GraphRepositoryProtocol):
+    def __init__(self, repository: GraphRepositoryProtocol, enrichment_service: EnrichmentService | None = None):
         self._repository = repository
+        self._enrichment_service = enrichment_service
 
     async def ensure_schema(self) -> None:
         await self._repository.ensure_schema()
@@ -54,6 +56,8 @@ class GraphService:
         await self._repository.upsert_event(event)
 
         entities = extract_entities(event)
+        if self._enrichment_service is not None:
+            entities = await self._enrichment_service.enrich_entities(event.tenant_id, entities)
         for entity in entities:
             await self._repository.upsert_entity(entity)
             await self._repository.upsert_observation(event, entity)

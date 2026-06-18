@@ -7,6 +7,9 @@ from pydantic import ValidationError
 
 from app.core.config import get_settings
 from app.database.session import init_db
+from app.enrichment.cache import RedisEnrichmentCache
+from app.enrichment.providers import OfflineJsonEnrichmentProvider
+from app.enrichment.service import EnrichmentService
 from app.graph.kafka_service import process_ocsf_event_message
 from app.graph.repository import GraphRepository, create_graph_driver
 from app.graph.service import GraphService
@@ -30,7 +33,18 @@ async def run_worker() -> None:
         auto_offset_reset="earliest",
     )
     driver = create_graph_driver()
-    graph = GraphService(GraphRepository(driver))
+    cache = RedisEnrichmentCache(settings.redis_url)
+    provider = OfflineJsonEnrichmentProvider(
+        settings.enrichment_ip_source_path,
+        settings.enrichment_file_hash_source_path,
+    )
+    enrichment = EnrichmentService(
+        provider,
+        cache=cache,
+        ttl_seconds=settings.enrichment_cache_ttl_seconds,
+        enabled=settings.enrichment_enabled,
+    )
+    graph = GraphService(GraphRepository(driver), enrichment_service=enrichment)
 
     await consumer.start()
     logger.info("Kafka graph worker started")
@@ -50,6 +64,7 @@ async def run_worker() -> None:
                 raise
             await consumer.commit()
     finally:
+        await cache.close()
         await driver.close()
         await consumer.stop()
 

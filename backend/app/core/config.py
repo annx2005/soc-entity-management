@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     kafka_dead_letter_topic: str = "soc.ingest-dlq.v1"
     kafka_ingestion_group_id: str = "soc-ingestion-workers"
     kafka_graph_group_id: str = "soc-graph-workers"
+    enrichment_ip_source_path: str = "/data/enrichment/ip_enrichment.json"
+    enrichment_file_hash_source_path: str = "/data/enrichment/file_hash_enrichment.json"
+    enrichment_cache_ttl_seconds: int = 86400
+    enrichment_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

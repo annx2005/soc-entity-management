@@ -124,6 +124,30 @@ def test_graph_service_is_idempotent_with_unique_event_evidence() -> None:
     assert next(iter(repo.relationship_facts.values()))["count"] == 1
 
 
+def test_graph_service_enriches_entities_before_upsert_and_keeps_relationship_inference() -> None:
+    event = normalize_event(
+        base_record(
+            "3",
+            {
+                "user": r"NT AUTHORITY\SYSTEM",
+                "sourceIp": "172.20.208.1",
+                "destinationIp": "8.8.8.8",
+                "image": r"C:\Program Files\App\agent.exe",
+            },
+        )
+    )
+    repo = FakeGraphRepository()
+    service = GraphService(repo, enrichment_service=FakeEnrichmentService())
+
+    result = asyncio.run(service.process_event(event))
+
+    ip_entities = [entity for entity in repo.entities.values() if entity.type.value == "ip"]
+    destination_ip = next(entity for entity in ip_entities if entity.value == "8.8.8.8")
+    assert destination_ip.properties["source_field"] == "dst_endpoint.ip"
+    assert destination_ip.properties["enrichment"]["country"] == "US"
+    assert result.relationships == 2
+
+
 def test_graph_service_caps_unique_sample_evidence_refs() -> None:
     repo = FakeGraphRepository()
     service = GraphService(repo)
@@ -241,6 +265,19 @@ class FakeGraphRepository:
         self.evidence_links[fact_key].add(candidate.evidence_ref)
         fact["count"] += 1
         fact["sample_evidence_refs"] = (fact["sample_evidence_refs"] + [candidate.evidence_ref])[-50:]
+
+
+class FakeEnrichmentService:
+    async def enrich_entities(self, tenant_id: str, entities):
+        enriched = []
+        for entity in entities:
+            if entity.type.value == "ip" and entity.value == "8.8.8.8":
+                properties = dict(entity.properties)
+                properties["enrichment"] = {"country": "US", "asn": "AS15169", "cache_status": "miss"}
+                enriched.append(entity.model_copy(update={"properties": properties}))
+            else:
+                enriched.append(entity)
+        return enriched
 
 
 class FakeApiGraphService:

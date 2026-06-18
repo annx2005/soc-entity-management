@@ -302,12 +302,20 @@ def _event_time_iso(event: OCSFEvent) -> str:
 
 
 def _promoted_properties(entity: Entity) -> dict[str, Any]:
+    enrichment = entity.properties.get("enrichment") if isinstance(entity.properties.get("enrichment"), dict) else {}
     if entity.type == EntityType.FILE_HASH:
-        return {"algorithm": entity.properties.get("algorithm")}
+        return {
+            "algorithm": entity.properties.get("algorithm"),
+            "reputation": enrichment.get("reputation"),
+            "malware_family": enrichment.get("malware_family"),
+        }
     if entity.type == EntityType.IP:
         return {
             "ip_version": entity.properties.get("version"),
             "is_private": _is_private_ip(entity.value),
+            "country": enrichment.get("country"),
+            "asn": enrichment.get("asn"),
+            "reputation": enrichment.get("reputation"),
         }
     if entity.type == EntityType.PROCESS:
         return {
