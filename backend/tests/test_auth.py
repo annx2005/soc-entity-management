@@ -76,6 +76,52 @@ def test_platform_login_returns_context_without_tenant() -> None:
     assert claims["tenant_id"] is None
 
 
+def test_register_creates_tenant_admin_and_returns_jwt() -> None:
+    client = auth_test_client()
+
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "tenant_name": "Globex",
+            "tenant_slug": "globex",
+            "email": "admin@globex.com",
+            "password": "correct-password",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    claims = decode_access_token(body["access_token"])
+
+    assert body["context"]["tenant_slug"] == "globex"
+    assert body["context"]["role"] == "admin"
+    assert body["context"]["scope"] == "tenant"
+    assert body["context"]["email"] == "admin@globex.com"
+    assert claims["tenant_slug"] == "globex"
+    assert claims["role"] == "admin"
+
+    me_response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"})
+    assert me_response.status_code == 200
+    assert me_response.json()["tenant_slug"] == "globex"
+
+
+def test_register_rejects_duplicate_tenant_slug() -> None:
+    client = auth_test_client()
+
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "tenant_name": "Another Acme",
+            "tenant_slug": "acme",
+            "email": "owner@acme-two.com",
+            "password": "correct-password",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "tenant slug is already in use"
+
+
 def auth_test_client(*, include_duplicate_email: bool = False) -> TestClient:
     engine = create_engine(
         "sqlite://",

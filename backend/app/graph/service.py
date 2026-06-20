@@ -30,7 +30,14 @@ class GraphRepositoryProtocol(Protocol):
     async def get_entity(self, tenant_id: str, entity_id: str) -> EntityResponse | None:
         ...
 
-    async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100) -> list[EntityResponse]:
+    async def list_entities(
+        self,
+        tenant_id: str,
+        entity_type: str | None = None,
+        value: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[EntityResponse]:
         ...
 
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
@@ -77,8 +84,15 @@ class GraphService:
     async def get_entity(self, tenant_id: str, entity_id: str) -> EntityResponse | None:
         return await self._repository.get_entity(tenant_id, entity_id)
 
-    async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100) -> list[EntityResponse]:
-        return await self._repository.list_entities(tenant_id, entity_type=entity_type, value=value, limit=limit)
+    async def list_entities(
+        self,
+        tenant_id: str,
+        entity_type: str | None = None,
+        value: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[EntityResponse]:
+        return await self._repository.list_entities(tenant_id, entity_type=entity_type, value=value, limit=limit, offset=offset)
 
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
         return await self._repository.list_relationships(tenant_id, entity_id, limit=limit)

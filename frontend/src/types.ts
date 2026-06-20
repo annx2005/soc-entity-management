@@ -1,0 +1,88 @@
+export type EntityType = 'user' | 'host' | 'ip' | 'domain' | 'file_hash' | 'process'
+
+export type TenantContext = {
+  account_id: string
+  tenant_id: string | null
+  tenant_slug: string | null
+  email: string
+  role: string
+  scope: string
+}
+
+export type LoginResponse = {
+  access_token: string
+  token_type: string
+  expires_in: number
+  context: TenantContext
+}
+
+export type Entity = {
+  id: string
+  tenant_id: string
+  entity_type: EntityType | string
+  value: string
+  first_seen: string | null
+  last_seen: string | null
+  source: string | null
+  properties: Record<string, unknown>
+}
+
+export type Relationship = {
+  id: string
+  tenant_id: string
+  relationship_type: string
+  from_id: string
+  to_id: string
+  first_seen: string | null
+  last_seen: string | null
+  count: number
+  sample_evidence_refs: string[]
+}
+
+export type GraphNode = {
+  id: string
+  labels: string[]
+  properties: Record<string, unknown>
+}
+
+export type GraphEdge = {
+  id: string
+  type: string
+  start_id: string
+  end_id: string
+  properties: Record<string, unknown>
+}
+
+export type GraphResponse = {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+export type IngestFileResponse = {
+  batch_id: number
+  source_name: string
+  status: string
+  total_records: number
+  normalized_records: number
+  error_records: number
+}
+
+export type NormalizedEvent = {
+  id: number
+  batch_id: number
+  event_id: string
+  event_type: string
+  source: string
+  normalized_event: Record<string, unknown>
+}
+
+export type IngestErrorRecord = {
+  id: number
+  batch_id: number
+  line_number: number
+  error_type: string
+  message: string
+  raw_line: string | null
+}
+
+export const ENTITY_TYPES: EntityType[] = ['user', 'host', 'ip', 'domain', 'file_hash', 'process']

@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.auth.security import verify_password
-from app.database.models import Account, AccountScope, AccountStatus, Tenant, TenantStatus
+from app.auth.security import hash_password, verify_password
+from app.database.models import Account, AccountRole, AccountScope, AccountStatus, Tenant, TenantStatus
 
 
 class AuthenticationError(ValueError):
@@ -16,6 +17,10 @@ class AuthenticationError(ValueError):
 
 
 class AmbiguousAccountError(AuthenticationError):
+    pass
+
+
+class RegistrationError(ValueError):
     pass
 
 
@@ -44,6 +49,43 @@ def authenticate_account(db: Session, *, email: str, password: str, tenant_slug:
     account.last_login_at = datetime.now(timezone.utc)
     db.add(account)
     db.commit()
+    db.refresh(account)
+    return AuthenticatedAccount(account=account, tenant=tenant)
+
+
+def register_tenant_account(
+    db: Session,
+    *,
+    tenant_name: str,
+    tenant_slug: str,
+    email: str,
+    password: str,
+) -> AuthenticatedAccount:
+    existing_tenant = db.execute(select(Tenant).where(Tenant.slug == tenant_slug)).scalar_one_or_none()
+    if existing_tenant is not None:
+        raise RegistrationError("tenant slug is already in use")
+
+    tenant = Tenant(name=tenant_name, slug=tenant_slug, status=TenantStatus.ACTIVE)
+    account = Account(
+        tenant_id=None,
+        email=email,
+        password_hash=hash_password(password),
+        role=AccountRole.ADMIN,
+        scope=AccountScope.TENANT,
+        status=AccountStatus.ACTIVE,
+    )
+
+    try:
+        db.add(tenant)
+        db.flush()
+        account.tenant_id = tenant.id
+        db.add(account)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise RegistrationError("unable to create tenant account") from exc
+
+    db.refresh(tenant)
     db.refresh(account)
     return AuthenticatedAccount(account=account, tenant=tenant)
 

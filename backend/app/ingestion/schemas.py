@@ -13,6 +13,8 @@ class IngestFileResponse(BaseModel):
     normalized_records: int
     error_records: int
 
+    model_config = {"from_attributes": True}
+
 
 class ErrorRecordResponse(BaseModel):
     id: int

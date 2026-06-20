@@ -15,7 +15,7 @@ from app.normalization.normalizer import normalize_event
 from app.normalization.schemas import UnsupportedEventError
 
 
-def ingest_jsonl_stream(db: Session, stream: TextIO, source_name: str) -> IngestionBatch:
+def ingest_jsonl_stream(db: Session, stream: TextIO, source_name: str, tenant_id: str = "default") -> IngestionBatch:
     batch = IngestionBatch(source_name=source_name, status="running")
     db.add(batch)
     db.flush()
@@ -32,7 +32,7 @@ def ingest_jsonl_stream(db: Session, stream: TextIO, source_name: str) -> Ingest
         total += 1
         try:
             record = json.loads(raw_line)
-            event = normalize_event(record)
+            event = _with_trusted_tenant(normalize_event(record), tenant_id)
             db.add(
                 IngestionHistory(
                     batch_id=batch.id,
@@ -68,15 +68,15 @@ def ingest_jsonl_stream(db: Session, stream: TextIO, source_name: str) -> Ingest
     return batch
 
 
-def ingest_jsonl_path(db: Session, file_path: str) -> IngestionBatch:
+def ingest_jsonl_path(db: Session, file_path: str, tenant_id: str = "default") -> IngestionBatch:
     path = Path(file_path).expanduser().resolve()
     with path.open("r", encoding="utf-8") as stream:
-        return ingest_jsonl_stream(db, stream, str(path))
+        return ingest_jsonl_stream(db, stream, str(path), tenant_id=tenant_id)
 
 
-def ingest_jsonl_bytes(db: Session, content: bytes, source_name: str) -> IngestionBatch:
+def ingest_jsonl_bytes(db: Session, content: bytes, source_name: str, tenant_id: str = "default") -> IngestionBatch:
     text = content.decode("utf-8")
-    return ingest_jsonl_stream(db, io.StringIO(text), source_name)
+    return ingest_jsonl_stream(db, io.StringIO(text), source_name, tenant_id=tenant_id)
 
 
 def list_errors(db: Session, limit: int = 100, batch_id: int | None = None) -> Iterable[ErrorRecord]:
@@ -91,6 +91,19 @@ def list_normalized_events(db: Session, limit: int = 100, batch_id: int | None =
     if batch_id is not None:
         stmt = select(IngestionHistory).where(IngestionHistory.batch_id == batch_id).order_by(IngestionHistory.id.desc()).limit(limit)
     return db.scalars(stmt).all()
+
+
+def get_batch(db: Session, batch_id: int) -> IngestionBatch | None:
+    return db.get(IngestionBatch, batch_id)
+
+
+def _with_trusted_tenant(event, tenant_id: str):
+    raw_tenant_id = event.tenant_id
+    unmapped = dict(event.unmapped)
+    if raw_tenant_id != tenant_id:
+        unmapped["raw_tenant_id"] = raw_tenant_id
+        unmapped["tenant_id_source"] = "authenticated_context"
+    return event.model_copy(update={"tenant_id": tenant_id, "unmapped": unmapped})
 
 
 def _error_record(batch_id: int, line_number: int, error_type: str, message: str, raw_line: str) -> ErrorRecord:

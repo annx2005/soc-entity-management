@@ -57,12 +57,13 @@ def test_enqueue_jsonl_stream_publishes_raw_events_and_tracks_batch() -> None:
     content = io.StringIO("\n".join([json.dumps(sysmon_dns_record("evt-1")), "", json.dumps(sysmon_dns_record("evt-2"))]))
 
     with sqlite_session() as db:
-        batch = asyncio.run(enqueue_jsonl_stream(db, content, "events.jsonl", publisher))
+        batch = asyncio.run(enqueue_jsonl_stream(db, content, "events.jsonl", publisher, tenant_id="trusted-tenant"))
 
         assert batch.status == "queued"
         assert batch.total_records == 2
         assert len(publisher.sent) == 2
         assert all(sent[2] == str(batch.id) for sent in publisher.sent)
+        assert all(sent[1].tenant_id == "trusted-tenant" for sent in publisher.sent)
         assert [sent[1].line_number for sent in publisher.sent] == [1, 3]
 
 
@@ -75,7 +76,13 @@ def test_process_raw_event_message_persists_normalized_event_and_publishes_downs
         db.commit()
         db.refresh(batch)
 
-        message = RawEventMessage(batch_id=batch.id, source_name=batch.source_name, line_number=1, raw_line=json.dumps(sysmon_dns_record()))
+        message = RawEventMessage(
+            batch_id=batch.id,
+            tenant_id="trusted-tenant",
+            source_name=batch.source_name,
+            line_number=1,
+            raw_line=json.dumps(sysmon_dns_record()),
+        )
         asyncio.run(process_raw_event_message(db, message, publisher))
 
         history = db.scalar(select(IngestionHistory))
@@ -83,6 +90,8 @@ def test_process_raw_event_message_persists_normalized_event_and_publishes_downs
 
         assert history is not None
         assert history.event_type == "dns_query"
+        assert history.normalized_event["tenant_id"] == "trusted-tenant"
+        assert history.normalized_event["unmapped"]["raw_tenant_id"] == "tenant-acme"
         assert history.normalized_event["class_uid"] == 4003
         assert history.normalized_event["query"]["hostname"] == "example.com"
         assert updated_batch is not None
@@ -90,6 +99,8 @@ def test_process_raw_event_message_persists_normalized_event_and_publishes_downs
         assert updated_batch.normalized_records == 1
         assert len(publisher.sent) == 1
         assert isinstance(publisher.sent[0][1], OCSFEventMessage)
+        assert publisher.sent[0][1].tenant_id == "trusted-tenant"
+        assert publisher.sent[0][1].ocsf_event["tenant_id"] == "trusted-tenant"
         assert publisher.sent[0][0] == "soc.ocsf-events.v1"
 
 
@@ -140,3 +151,42 @@ def test_process_raw_event_message_records_unsupported_event_and_publishes_dlq()
         assert updated_batch.error_records == 1
         assert len(publisher.sent) == 1
         assert isinstance(publisher.sent[0][1], DeadLetterMessage)
+
+
+def test_process_raw_event_message_counts_duplicate_event_as_processed_without_republishing() -> None:
+    publisher = FakePublisher()
+
+    with sqlite_session() as db:
+        batch = IngestionBatch(source_name="events.jsonl", status="queued", total_records=2)
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)
+
+        message = RawEventMessage(
+            batch_id=batch.id,
+            tenant_id="trusted-tenant",
+            source_name=batch.source_name,
+            line_number=1,
+            raw_line=json.dumps(sysmon_dns_record("evt-dup")),
+        )
+        asyncio.run(process_raw_event_message(db, message, publisher))
+
+        duplicate_message = RawEventMessage(
+            batch_id=batch.id,
+            tenant_id="trusted-tenant",
+            source_name=batch.source_name,
+            line_number=2,
+            raw_line=json.dumps(sysmon_dns_record("evt-dup")),
+        )
+        asyncio.run(process_raw_event_message(db, duplicate_message, publisher))
+
+        history = db.scalars(select(IngestionHistory)).all()
+        updated_batch = db.get(IngestionBatch, batch.id)
+
+        assert len(history) == 1
+        assert updated_batch is not None
+        assert updated_batch.normalized_records == 2
+        assert updated_batch.error_records == 0
+        assert updated_batch.status == "completed"
+        assert len(publisher.sent) == 1
+        assert isinstance(publisher.sent[0][1], OCSFEventMessage)

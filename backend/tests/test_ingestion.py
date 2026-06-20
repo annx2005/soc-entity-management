@@ -21,12 +21,14 @@ def test_ingest_jsonl_stream_records_success_and_errors() -> None:
     )
 
     with Session(engine) as db:
-        batch = ingest_jsonl_stream(db, io.StringIO(content), "test.jsonl")
+        batch = ingest_jsonl_stream(db, io.StringIO(content), "test.jsonl", tenant_id="trusted-tenant")
 
         assert batch.total_records == 3
         assert batch.normalized_records == 1
         assert batch.error_records == 2
         assert db.scalar(select(IngestionBatch).where(IngestionBatch.id == batch.id)) is not None
-        assert len(db.scalars(select(IngestionHistory)).all()) == 1
+        history = db.scalar(select(IngestionHistory))
+        assert history is not None
+        assert history.normalized_event["tenant_id"] == "trusted-tenant"
         errors = db.scalars(select(ErrorRecord).order_by(ErrorRecord.id)).all()
         assert [error.error_type for error in errors] == ["json_parse_error", "unsupported_event"]

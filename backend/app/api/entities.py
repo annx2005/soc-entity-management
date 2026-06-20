@@ -19,9 +19,10 @@ async def list_entities(
     entity_type: Annotated[Optional[str], Query()] = None,
     value: Annotated[Optional[str], Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[EntityResponse]:
     tenant_id = _tenant_id_or_forbidden(context)
-    return await graph.list_entities(tenant_id, entity_type=entity_type, value=value, limit=limit)
+    return await graph.list_entities(tenant_id, entity_type=entity_type, value=value, limit=limit, offset=offset)
 
 
 @router.get("/entities/{entity_id}", response_model=EntityResponse)

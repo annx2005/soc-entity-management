@@ -23,18 +23,18 @@ class EventPublisher(Protocol):
         ...
 
 
-async def enqueue_jsonl_path(db: Session, file_path: str, publisher: Optional[EventPublisher] = None) -> IngestionBatch:
+async def enqueue_jsonl_path(db: Session, file_path: str, publisher: Optional[EventPublisher] = None, tenant_id: str = "default") -> IngestionBatch:
     path = Path(file_path).expanduser().resolve()
     with path.open("r", encoding="utf-8") as stream:
-        return await enqueue_jsonl_stream(db, stream, str(path), publisher=publisher)
+        return await enqueue_jsonl_stream(db, stream, str(path), publisher=publisher, tenant_id=tenant_id)
 
 
-async def enqueue_jsonl_bytes(db: Session, content: bytes, source_name: str, publisher: Optional[EventPublisher] = None) -> IngestionBatch:
+async def enqueue_jsonl_bytes(db: Session, content: bytes, source_name: str, publisher: Optional[EventPublisher] = None, tenant_id: str = "default") -> IngestionBatch:
     text = content.decode("utf-8")
-    return await enqueue_jsonl_stream(db, io.StringIO(text), source_name, publisher=publisher)
+    return await enqueue_jsonl_stream(db, io.StringIO(text), source_name, publisher=publisher, tenant_id=tenant_id)
 
 
-async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, publisher: Optional[EventPublisher] = None) -> IngestionBatch:
+async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, publisher: Optional[EventPublisher] = None, tenant_id: str = "default") -> IngestionBatch:
     batch = IngestionBatch(source_name=source_name, status="publishing")
     db.add(batch)
     db.flush()
@@ -61,6 +61,7 @@ async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, pu
             total_records += 1
             message = RawEventMessage(
                 batch_id=batch.id,
+                tenant_id=tenant_id,
                 source_name=source_name,
                 line_number=line_number,
                 raw_line=raw_line,
@@ -72,6 +73,7 @@ async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, pu
                 headers={
                     "schema_version": message.schema_version,
                     "batch_id": str(batch.id),
+                    "tenant_id": tenant_id,
                     "source_name": source_name,
                 },
             )
@@ -101,7 +103,7 @@ async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, pu
 async def process_raw_event_message(db: Session, message: RawEventMessage, publisher: Optional[EventPublisher] = None) -> None:
     try:
         record = json.loads(message.raw_line)
-        event = normalize_event(record)
+        event = _with_trusted_tenant(normalize_event(record), message.tenant_id)
     except json.JSONDecodeError as exc:
         await _record_processing_error(db, message, "json_parse_error", str(exc), publisher)
         return
@@ -110,6 +112,10 @@ async def process_raw_event_message(db: Session, message: RawEventMessage, publi
         return
 
     if _normalized_event_exists(db, message.batch_id, event.event_id):
+        # Count duplicate event ids as processed so the batch can complete,
+        # but do not persist or republish the same normalized event again.
+        _mark_batch_progress(db, message.batch_id, normalized_delta=1, error_delta=0)
+        db.commit()
         return
 
     db.add(
@@ -149,6 +155,15 @@ async def process_raw_event_message(db: Session, message: RawEventMessage, publi
         )
 
     db.commit()
+
+
+def _with_trusted_tenant(event, tenant_id: str):
+    raw_tenant_id = event.tenant_id
+    unmapped = dict(event.unmapped)
+    if raw_tenant_id != tenant_id:
+        unmapped["raw_tenant_id"] = raw_tenant_id
+        unmapped["tenant_id_source"] = "authenticated_context"
+    return event.model_copy(update={"tenant_id": tenant_id, "unmapped": unmapped})
 
 
 def _normalized_event_exists(db: Session, batch_id: int, event_id: str) -> bool:

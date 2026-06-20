@@ -15,6 +15,7 @@ class RawEventMessage(BaseModel):
     schema_version: Literal["soc.raw-event.v1"] = "soc.raw-event.v1"
     message_id: str = Field(default_factory=lambda: str(uuid4()))
     batch_id: int
+    tenant_id: str = "default"
     source_name: str
     line_number: int
     raw_line: str

@@ -284,8 +284,8 @@ class FakeApiGraphService:
     def __init__(self, entities: dict[str, dict[str, EntityResponse]] | None = None) -> None:
         self.entities = entities or {}
 
-    async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100):
-        return list(self.entities.get(tenant_id, {}).values())[:limit]
+    async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100, offset: int = 0):
+        return list(self.entities.get(tenant_id, {}).values())[offset : offset + limit]
 
     async def get_entity(self, tenant_id: str, entity_id: str):
         return self.entities.get(tenant_id, {}).get(entity_id)

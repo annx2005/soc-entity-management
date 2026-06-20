@@ -224,9 +224,10 @@ class GraphRepository:
         entity_type: str | None = None,
         value: str | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[EntityResponse]:
         clauses = ["entity.tenant_id = $tenant_id"]
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit, "offset": offset}
         if entity_type:
             clauses.append("entity.entity_type = $entity_type")
             params["entity_type"] = entity_type
@@ -238,6 +239,7 @@ class GraphRepository:
         WHERE {" AND ".join(clauses)}
         RETURN entity
         ORDER BY entity.last_seen DESC
+        SKIP $offset
         LIMIT $limit
         """
         async with self._driver.session() as session:
