@@ -63,6 +63,9 @@ class GraphRepositoryProtocol(Protocol):
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
         ...
 
+    async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50) -> GraphResponse:
+        ...
+
 
 class GraphService:
     def __init__(
@@ -147,6 +150,9 @@ class GraphService:
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
         return await self._repository.get_graph(tenant_id, entity_id, hops=hops, limit=limit)
+
+    async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50) -> GraphResponse:
+        return await self._repository.find_path(tenant_id, source_id, target_id, max_hops=max_hops, limit=limit)
 
     def _record_graph_audit(
         self,

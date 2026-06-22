@@ -285,18 +285,37 @@ class GraphRepository:
             return [_evidence_response(record["event"], record["obs"]) async for record in result]
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
-        if hops not in (1, 2):
-            raise ValueError("hops must be 1 or 2")
+        if hops < 1 or hops > 4:
+            raise ValueError("hops must be between 1 and 4")
         query = f"""
         MATCH path = (entity:Entity {{id: $entity_id, tenant_id: $tenant_id}})-[*1..{hops}]-(neighbor:Entity)
         WHERE neighbor.tenant_id = $tenant_id
+          AND all(node IN nodes(path) WHERE node:Entity AND node.tenant_id = $tenant_id)
+          AND all(rel IN relationships(path) WHERE rel.tenant_id = $tenant_id)
         RETURN path
         LIMIT $limit
         """
+        return await self._paths_to_graph(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
+
+    async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50) -> GraphResponse:
+        if max_hops < 1 or max_hops > 4:
+            raise ValueError("max_hops must be between 1 and 4")
+        query = f"""
+        MATCH (source:Entity {{id: $source_id, tenant_id: $tenant_id}})
+        MATCH (target:Entity {{id: $target_id, tenant_id: $tenant_id}})
+        MATCH path = allShortestPaths((source)-[*1..{max_hops}]-(target))
+        WHERE all(node IN nodes(path) WHERE node:Entity AND node.tenant_id = $tenant_id)
+          AND all(rel IN relationships(path) WHERE rel.tenant_id = $tenant_id)
+        RETURN path
+        LIMIT $limit
+        """
+        return await self._paths_to_graph(query, tenant_id=tenant_id, source_id=source_id, target_id=target_id, limit=limit)
+
+    async def _paths_to_graph(self, query: str, **params: Any) -> GraphResponse:
         nodes: dict[str, GraphNode] = {}
         edges: dict[str, GraphEdge] = {}
         async with self._driver.session() as session:
-            result = await session.run(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
+            result = await session.run(query, **params)
             async for record in result:
                 path: Path = record["path"]
                 for node in path.nodes:
