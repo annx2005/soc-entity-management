@@ -6,7 +6,9 @@ import logging
 from pydantic import ValidationError
 
 from app.core.config import get_settings
+from app.audit.service import AuditLogger
 from app.database.session import init_db
+from app.database.session import SessionLocal
 from app.enrichment.cache import RedisEnrichmentCache
 from app.enrichment.providers import OfflineJsonEnrichmentProvider
 from app.enrichment.service import EnrichmentService
@@ -44,7 +46,7 @@ async def run_worker() -> None:
         ttl_seconds=settings.enrichment_cache_ttl_seconds,
         enabled=settings.enrichment_enabled,
     )
-    graph = GraphService(GraphRepository(driver), enrichment_service=enrichment)
+    graph = GraphService(GraphRepository(driver), enrichment_service=enrichment, audit_logger=AuditLogger(SessionLocal))
 
     await consumer.start()
     logger.info("Kafka graph worker started")

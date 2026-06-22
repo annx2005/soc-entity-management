@@ -31,6 +31,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_postgres_schema_extras()
+    _ensure_sqlite_schema_extras()
 
 
 def _ensure_postgres_schema_extras() -> None:
@@ -49,6 +50,12 @@ def _ensure_postgres_schema_extras() -> None:
         "ALTER TABLE accounts ALTER COLUMN status SET DEFAULT 'active'",
         "ALTER TABLE accounts ALTER COLUMN created_at SET DEFAULT now()",
         "ALTER TABLE accounts ALTER COLUMN updated_at SET DEFAULT now()",
+        "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(255)",
+        "ALTER TABLE audit_logs ALTER COLUMN actor SET DEFAULT 'system'",
+        "ALTER TABLE audit_logs ALTER COLUMN created_at SET DEFAULT now()",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_created_at ON audit_logs(tenant_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_action ON audit_logs(tenant_id, action)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)",
         """
         CREATE OR REPLACE FUNCTION set_updated_at()
         RETURNS TRIGGER AS $$
@@ -74,4 +81,20 @@ def _ensure_postgres_schema_extras() -> None:
 
     with engine.begin() as connection:
         for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_sqlite_schema_extras() -> None:
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as connection:
+        audit_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(audit_logs)"))}
+        if "tenant_id" not in audit_columns:
+            connection.execute(text("ALTER TABLE audit_logs ADD COLUMN tenant_id VARCHAR(255)"))
+        for statement in [
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_created_at ON audit_logs(tenant_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_action ON audit_logs(tenant_id, action)",
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)",
+        ]:
             connection.execute(text(statement))

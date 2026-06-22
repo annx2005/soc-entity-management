@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from app.database.models import ErrorRecord, IngestionBatch, IngestionHistory
+from app.database.models import AuditLog, ErrorRecord, IngestionBatch, IngestionHistory
 from app.database.session import Base
 from app.ingestion.kafka_messages import DeadLetterMessage, OCSFEventMessage, RawEventMessage
 from app.ingestion.kafka_service import enqueue_jsonl_stream, process_raw_event_message
@@ -65,6 +65,8 @@ def test_enqueue_jsonl_stream_publishes_raw_events_and_tracks_batch() -> None:
         assert all(sent[2] == str(batch.id) for sent in publisher.sent)
         assert all(sent[1].tenant_id == "trusted-tenant" for sent in publisher.sent)
         assert [sent[1].line_number for sent in publisher.sent] == [1, 3]
+        audit_actions = db.scalars(select(AuditLog.action).order_by(AuditLog.id)).all()
+        assert audit_actions == ["ingest_batch_started", "ingest_batch_queued"]
 
 
 def test_process_raw_event_message_persists_normalized_event_and_publishes_downstream() -> None:
@@ -102,6 +104,8 @@ def test_process_raw_event_message_persists_normalized_event_and_publishes_downs
         assert publisher.sent[0][1].tenant_id == "trusted-tenant"
         assert publisher.sent[0][1].ocsf_event["tenant_id"] == "trusted-tenant"
         assert publisher.sent[0][0] == "soc.ocsf-events.v1"
+        audit_actions = db.scalars(select(AuditLog.action).order_by(AuditLog.id)).all()
+        assert audit_actions == ["tenant_mismatch_detected", "ingest_batch_completed"]
 
 
 def test_process_raw_event_message_records_error_and_publishes_dlq() -> None:
@@ -126,6 +130,8 @@ def test_process_raw_event_message_records_error_and_publishes_dlq() -> None:
         assert updated_batch.error_records == 1
         assert len(publisher.sent) == 1
         assert isinstance(publisher.sent[0][1], DeadLetterMessage)
+        completed = db.scalar(select(AuditLog).where(AuditLog.action == "ingest_batch_completed"))
+        assert completed is not None
 
 
 def test_process_raw_event_message_records_unsupported_event_and_publishes_dlq() -> None:

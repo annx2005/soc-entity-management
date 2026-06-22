@@ -74,7 +74,7 @@ class GraphRepository:
             record = await result.single()
             return str(record["id"])
 
-    async def upsert_entity(self, entity: Entity) -> None:
+    async def upsert_entity(self, entity: Entity) -> str:
         label = label_for_entity_type(entity.type)
         query = f"""
         MERGE (entity:Entity:{label} {{id: $id}})
@@ -85,7 +85,8 @@ class GraphRepository:
             entity.first_seen = datetime($first_seen),
             entity.last_seen = datetime($last_seen),
             entity.source = $source,
-            entity.properties_json = $properties_json
+            entity.properties_json = $properties_json,
+            entity.audit_created = true
         ON MATCH SET
             entity.first_seen = CASE
                 WHEN datetime($first_seen) < entity.first_seen THEN datetime($first_seen)
@@ -96,11 +97,15 @@ class GraphRepository:
                 ELSE entity.last_seen
             END,
             entity.source = $source,
-            entity.properties_json = $properties_json
+            entity.properties_json = $properties_json,
+            entity.audit_created = false
         SET entity += $promoted_properties
+        WITH entity, entity.audit_created AS was_created
+        REMOVE entity.audit_created
+        RETURN CASE WHEN was_created THEN 'created' ELSE 'updated' END AS status
         """
         async with self._driver.session() as session:
-            await session.run(
+            result = await session.run(
                 query,
                 id=entity.id,
                 tenant_id=entity.tenant_id,
@@ -112,6 +117,8 @@ class GraphRepository:
                 properties_json=_json_dumps(entity.properties),
                 promoted_properties=_promoted_properties(entity),
             )
+            record = await result.single()
+            return str(record["status"])
 
     async def upsert_observation(self, event: OCSFEvent, entity: Entity) -> str:
         field_path = str(entity.properties.get("source_field") or "unknown")
@@ -149,7 +156,7 @@ class GraphRepository:
             record = await result.single()
             return str(record["id"])
 
-    async def upsert_relationship(self, tenant_id: str, candidate: RelationshipCandidate) -> None:
+    async def upsert_relationship(self, tenant_id: str, candidate: RelationshipCandidate) -> str:
         relationship_type = validate_relationship_type(candidate.relationship_type)
         fact_id = relationship_fact_id(tenant_id, relationship_type, candidate.from_id, candidate.to_id)
         query = f"""
@@ -165,10 +172,13 @@ class GraphRepository:
             fact.first_seen = datetime($observed_at),
             fact.last_seen = datetime($observed_at),
             fact.count = 0,
-            fact.sample_evidence_refs = []
+            fact.sample_evidence_refs = [],
+            fact.audit_created = true
+        ON MATCH SET
+            fact.audit_created = false
         WITH from_entity, to_entity, event, fact
         OPTIONAL MATCH (event)-[existing:EVIDENCES]->(fact)
-        WITH from_entity, to_entity, event, fact, existing IS NULL AS is_new
+        WITH from_entity, to_entity, event, fact, existing IS NULL AS is_new, fact.audit_created AS was_created
         MERGE (event)-[:EVIDENCES]->(fact)
         SET
             fact.first_seen = CASE
@@ -197,9 +207,11 @@ class GraphRepository:
             rel.first_seen = fact.first_seen,
             rel.last_seen = fact.last_seen,
             rel.count = fact.count
+        REMOVE fact.audit_created
+        RETURN CASE WHEN was_created THEN 'created' ELSE 'updated' END AS status
         """
         async with self._driver.session() as session:
-            await session.run(
+            result = await session.run(
                 query,
                 tenant_id=tenant_id,
                 from_id=candidate.from_id,
@@ -210,6 +222,8 @@ class GraphRepository:
                 evidence_ref=candidate.evidence_ref,
                 observed_at=candidate.observed_at,
             )
+            record = await result.single()
+            return str(record["status"])
 
     async def get_entity(self, tenant_id: str, entity_id: str) -> EntityResponse | None:
         query = "MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id}) RETURN entity"

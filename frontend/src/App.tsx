@@ -16,6 +16,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  ScrollText,
   UserRound,
   UserRoundPlus,
 } from 'lucide-react'
@@ -30,6 +31,7 @@ import {
   getMe,
   getStoredToken,
   ingestFile,
+  listAuditLogs,
   listIngestErrors,
   listEntities,
   listRelationships,
@@ -40,7 +42,17 @@ import {
 } from './api'
 import { GraphView } from './GraphView'
 import { ENTITY_TYPES } from './types'
-import type { Entity, EntityType, GraphResponse, IngestErrorRecord, IngestFileResponse, NormalizedEvent, Relationship, TenantContext } from './types'
+import type {
+  AuditLog,
+  Entity,
+  EntityType,
+  GraphResponse,
+  IngestErrorRecord,
+  IngestFileResponse,
+  NormalizedEvent,
+  Relationship,
+  TenantContext,
+} from './types'
 
 type DetailState = {
   entity: Entity | null
@@ -82,6 +94,7 @@ function App() {
   const [authLoading, setAuthLoading] = useState(Boolean(token))
   const [appError, setAppError] = useState<string | null>(null)
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL)
+  const [auditRefreshKey, setAuditRefreshKey] = useState(0)
 
   const refreshEntities = useCallback(async () => {
     if (!token) return
@@ -229,6 +242,7 @@ function App() {
           <ImportDataPanel
             token={token}
             onFinished={() => {
+              setAuditRefreshKey((key) => key + 1)
               if (entityPage === 0) {
                 void refreshEntities()
               } else {
@@ -337,14 +351,17 @@ function App() {
         </aside>
 
         <section className="detail-pane">
-          {selectedEntity ? (
-            <EntityDetail entity={selectedEntity} detail={detail} />
-          ) : (
-            <div className="empty-detail">
-              <CircleDot size={22} />
-              <span>Select an entity</span>
-            </div>
-          )}
+          <div className="detail-stack">
+            {selectedEntity ? (
+              <EntityDetail entity={selectedEntity} detail={detail} />
+            ) : (
+              <div className="empty-detail">
+                <CircleDot size={22} />
+                <span>Select an entity</span>
+              </div>
+            )}
+            <AuditLogPanel token={token} refreshKey={auditRefreshKey} />
+          </div>
         </section>
       </section>
     </main>
@@ -741,6 +758,60 @@ function EntityDetail({ entity, detail }: { entity: Entity; detail: DetailState 
   )
 }
 
+function AuditLogPanel({ token, refreshKey }: { token: string; refreshKey: number }) {
+  const [logs, setLogs] = useState<AuditLog[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadLogs = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setLogs(await listAuditLogs(token, { limit: 50 }))
+    } catch (loadError) {
+      setError(messageFrom(loadError))
+    } finally {
+      setLoading(false)
+    }
+  }, [token])
+
+  useEffect(() => {
+    void loadLogs()
+  }, [loadLogs, refreshKey])
+
+  return (
+    <section className="panel audit-panel">
+      <div className="section-head">
+        <div>
+          <h3>Audit log</h3>
+          <span>{logs.length} recent events</span>
+        </div>
+        <button type="button" className="icon-button" onClick={() => void loadLogs()} aria-label="Refresh audit log" title="Refresh audit log">
+          {loading ? <Activity size={15} className="spin" /> : <ScrollText size={15} />}
+        </button>
+      </div>
+      {error ? <div className="notice error">{error}</div> : null}
+      <div className="audit-list">
+        {logs.map((log) => (
+          <div className="audit-row" key={log.id}>
+            <ScrollText size={15} />
+            <div>
+              <strong>{formatAction(log.action)}</strong>
+              <span>{formatAuditTarget(log)}</span>
+              <small>{formatAuditMetadata(log.metadata_json)}</small>
+            </div>
+            <div>
+              <span>{log.actor}</span>
+              <time>{formatDate(log.created_at)}</time>
+            </div>
+          </div>
+        ))}
+        {!loading && logs.length === 0 ? <div className="empty-state compact">No audit events</div> : null}
+      </div>
+    </section>
+  )
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="metric">
@@ -787,6 +858,25 @@ function formatValue(value: unknown): string {
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return JSON.stringify(value)
+}
+
+function formatAction(action: string): string {
+  return action.replaceAll('_', ' ')
+}
+
+function formatAuditTarget(log: AuditLog): string {
+  return log.target_id ? `${log.target_type} · ${log.target_id}` : log.target_type
+}
+
+function formatAuditMetadata(metadata: Record<string, unknown>): string {
+  const rawTenant = metadata.raw_tenant_id
+  const trustedTenant = metadata.trusted_tenant_id
+  if (typeof rawTenant === 'string' && typeof trustedTenant === 'string') return `${rawTenant} -> ${trustedTenant}`
+  const eventId = metadata.event_id
+  if (typeof eventId === 'string') return `event ${eventId}`
+  const sourceName = metadata.source_name
+  if (typeof sourceName === 'string') return sourceName
+  return ''
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

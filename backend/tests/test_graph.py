@@ -164,6 +164,23 @@ def test_graph_service_caps_unique_sample_evidence_refs() -> None:
     assert fact["sample_evidence_refs"][-1] == "evt-059"
 
 
+def test_graph_service_audits_entity_and_relationship_upserts() -> None:
+    event = auth_event()
+    repo = FakeGraphRepository()
+    audit = FakeAuditLogger()
+    service = GraphService(repo, audit_logger=audit)
+
+    asyncio.run(service.process_event(event))
+    asyncio.run(service.process_event(event))
+
+    actions = [entry["action"] for entry in audit.entries]
+    assert "entity_created" in actions
+    assert "entity_updated" in actions
+    assert "relationship_created" in actions
+    assert "relationship_updated" in actions
+    assert all(entry["tenant_id"] == event.tenant_id for entry in audit.entries)
+
+
 def test_process_ocsf_event_message_runs_graph_flow() -> None:
     event = auth_event()
     message = OCSFEventMessage(
@@ -246,7 +263,9 @@ class FakeGraphRepository:
         return event.event_id
 
     async def upsert_entity(self, entity) -> None:
+        status = "updated" if entity.id in self.entities else "created"
         self.entities[entity.id] = entity
+        return status
 
     async def upsert_observation(self, event: OCSFEvent, entity) -> str:
         field_path = entity.properties.get("source_field") or "unknown"
@@ -256,15 +275,17 @@ class FakeGraphRepository:
 
     async def upsert_relationship(self, tenant_id: str, candidate) -> None:
         fact_key = (tenant_id, candidate.relationship_type, candidate.from_id, candidate.to_id)
+        status = "updated" if fact_key in self.relationship_facts else "created"
         fact = self.relationship_facts.setdefault(
             fact_key,
             {"count": 0, "sample_evidence_refs": []},
         )
         if candidate.evidence_ref in self.evidence_links[fact_key]:
-            return
+            return status
         self.evidence_links[fact_key].add(candidate.evidence_ref)
         fact["count"] += 1
         fact["sample_evidence_refs"] = (fact["sample_evidence_refs"] + [candidate.evidence_ref])[-50:]
+        return status
 
 
 class FakeEnrichmentService:
@@ -278,6 +299,14 @@ class FakeEnrichmentService:
             else:
                 enriched.append(entity)
         return enriched
+
+
+class FakeAuditLogger:
+    def __init__(self) -> None:
+        self.entries = []
+
+    def record(self, **kwargs) -> None:
+        self.entries.append(kwargs)
 
 
 class FakeApiGraphService:

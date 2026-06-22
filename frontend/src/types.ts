@@ -85,4 +85,15 @@ export type IngestErrorRecord = {
   raw_line: string | null
 }
 
+export type AuditLog = {
+  id: number
+  tenant_id: string | null
+  action: string
+  actor: string
+  target_type: string
+  target_id: string | null
+  metadata_json: Record<string, unknown>
+  created_at: string
+}
+
 export const ENTITY_TYPES: EntityType[] = ['user', 'host', 'ip', 'domain', 'file_hash', 'process']

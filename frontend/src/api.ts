@@ -1,4 +1,5 @@
 import type {
+  AuditLog,
   Entity,
   EntityType,
   GraphResponse,
@@ -31,6 +32,14 @@ type EntityFilters = {
   value?: string
   limit?: number
   offset?: number
+}
+
+type AuditLogFilters = {
+  limit?: number
+  offset?: number
+  action?: string
+  targetType?: string
+  targetId?: string
 }
 
 export function getStoredToken(): string | null {
@@ -116,6 +125,14 @@ export async function listIngestErrors(batchId?: number): Promise<IngestErrorRec
 
 export async function getIngestBatch(batchId: number): Promise<IngestFileResponse> {
   return request<IngestFileResponse>(`/api/events/batches/${batchId}`)
+}
+
+export async function listAuditLogs(token: string, filters: AuditLogFilters = {}): Promise<AuditLog[]> {
+  const params = new URLSearchParams({ limit: String(filters.limit ?? 50), offset: String(filters.offset ?? 0) })
+  if (filters.action?.trim()) params.set('action', filters.action.trim())
+  if (filters.targetType?.trim()) params.set('target_type', filters.targetType.trim())
+  if (filters.targetId?.trim()) params.set('target_id', filters.targetId.trim())
+  return request<AuditLog[]>(`/api/audit-logs?${params.toString()}`, undefined, token)
 }
 
 async function request<T>(path: string, init?: RequestInit, token?: string): Promise<T> {

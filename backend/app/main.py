@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
+from app.api.audit import router as audit_router
 from app.api.auth import router as auth_router
 from app.api.entities import router as entities_router
 from app.api.events import router as events_router
@@ -24,6 +25,7 @@ app = FastAPI(title=get_settings().app_name, version="0.1.0", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(events_router)
 app.include_router(entities_router)
+app.include_router(audit_router)
 
 
 @app.get("/health")

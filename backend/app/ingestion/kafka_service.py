@@ -10,10 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audit.service import record_audit_log
 from app.core.config import get_settings
 from app.database.models import ErrorRecord, IngestionBatch, IngestionHistory, JobStatus
 from app.ingestion.kafka_client import KafkaJsonProducer
 from app.ingestion.kafka_messages import DeadLetterMessage, OCSFEventMessage, RawEventMessage
+from app.normalization.helpers import get_nested, normalize_empty
 from app.normalization.normalizer import normalize_event
 from app.normalization.schemas import UnsupportedEventError
 
@@ -23,21 +25,50 @@ class EventPublisher(Protocol):
         ...
 
 
-async def enqueue_jsonl_path(db: Session, file_path: str, publisher: Optional[EventPublisher] = None, tenant_id: str = "default") -> IngestionBatch:
+async def enqueue_jsonl_path(
+    db: Session,
+    file_path: str,
+    publisher: Optional[EventPublisher] = None,
+    tenant_id: str = "default",
+    actor: str = "system",
+) -> IngestionBatch:
     path = Path(file_path).expanduser().resolve()
     with path.open("r", encoding="utf-8") as stream:
-        return await enqueue_jsonl_stream(db, stream, str(path), publisher=publisher, tenant_id=tenant_id)
+        return await enqueue_jsonl_stream(db, stream, str(path), publisher=publisher, tenant_id=tenant_id, actor=actor)
 
 
-async def enqueue_jsonl_bytes(db: Session, content: bytes, source_name: str, publisher: Optional[EventPublisher] = None, tenant_id: str = "default") -> IngestionBatch:
+async def enqueue_jsonl_bytes(
+    db: Session,
+    content: bytes,
+    source_name: str,
+    publisher: Optional[EventPublisher] = None,
+    tenant_id: str = "default",
+    actor: str = "system",
+) -> IngestionBatch:
     text = content.decode("utf-8")
-    return await enqueue_jsonl_stream(db, io.StringIO(text), source_name, publisher=publisher, tenant_id=tenant_id)
+    return await enqueue_jsonl_stream(db, io.StringIO(text), source_name, publisher=publisher, tenant_id=tenant_id, actor=actor)
 
 
-async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, publisher: Optional[EventPublisher] = None, tenant_id: str = "default") -> IngestionBatch:
+async def enqueue_jsonl_stream(
+    db: Session,
+    stream: TextIO,
+    source_name: str,
+    publisher: Optional[EventPublisher] = None,
+    tenant_id: str = "default",
+    actor: str = "system",
+) -> IngestionBatch:
     batch = IngestionBatch(source_name=source_name, status="publishing")
     db.add(batch)
     db.flush()
+    record_audit_log(
+        db,
+        tenant_id=tenant_id,
+        action="ingest_batch_started",
+        actor=actor,
+        target_type="ingestion_batch",
+        target_id=str(batch.id),
+        metadata={"source_name": source_name, "mode": "async"},
+    )
 
     job = JobStatus(batch_id=batch.id, job_type="kafka_publish_raw_events", status="running", details={"source_name": source_name})
     db.add(job)
@@ -84,6 +115,15 @@ async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, pu
         job.status = "completed"
         job.details = {"source_name": source_name, "published_records": total_records}
         job.updated_at = datetime.now(timezone.utc)
+        record_audit_log(
+            db,
+            tenant_id=tenant_id,
+            action="ingest_batch_queued",
+            actor=actor,
+            target_type="ingestion_batch",
+            target_id=str(batch.id),
+            metadata={"source_name": source_name, "mode": "async", "published_records": total_records},
+        )
         db.commit()
         db.refresh(batch)
         return batch
@@ -93,6 +133,15 @@ async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, pu
         job.status = "failed"
         job.details = {"source_name": source_name, "published_records": total_records, "error": str(exc)}
         job.updated_at = datetime.now(timezone.utc)
+        record_audit_log(
+            db,
+            tenant_id=tenant_id,
+            action="ingest_batch_failed",
+            actor=actor,
+            target_type="ingestion_batch",
+            target_id=str(batch.id),
+            metadata={"source_name": source_name, "mode": "async", "published_records": total_records, "error": str(exc)},
+        )
         db.commit()
         raise
     finally:
@@ -103,7 +152,9 @@ async def enqueue_jsonl_stream(db: Session, stream: TextIO, source_name: str, pu
 async def process_raw_event_message(db: Session, message: RawEventMessage, publisher: Optional[EventPublisher] = None) -> None:
     try:
         record = json.loads(message.raw_line)
-        event = _with_trusted_tenant(normalize_event(record), message.tenant_id)
+        raw_tenant_id = _declared_raw_tenant_id(record)
+        event = _with_trusted_tenant(normalize_event(record), message.tenant_id, raw_tenant_id)
+        _record_tenant_mismatch_audit(db, message, event.event_id, raw_tenant_id)
     except json.JSONDecodeError as exc:
         await _record_processing_error(db, message, "json_parse_error", str(exc), publisher)
         return
@@ -114,7 +165,7 @@ async def process_raw_event_message(db: Session, message: RawEventMessage, publi
     if _normalized_event_exists(db, message.batch_id, event.event_id):
         # Count duplicate event ids as processed so the batch can complete,
         # but do not persist or republish the same normalized event again.
-        _mark_batch_progress(db, message.batch_id, normalized_delta=1, error_delta=0)
+        _mark_batch_progress(db, message.batch_id, tenant_id=message.tenant_id, normalized_delta=1, error_delta=0)
         db.commit()
         return
 
@@ -127,7 +178,7 @@ async def process_raw_event_message(db: Session, message: RawEventMessage, publi
             normalized_event=event.model_dump(mode="json"),
         )
     )
-    _mark_batch_progress(db, message.batch_id, normalized_delta=1, error_delta=0)
+    _mark_batch_progress(db, message.batch_id, tenant_id=message.tenant_id, normalized_delta=1, error_delta=0)
 
     if publisher is not None:
         ocsf_message = OCSFEventMessage(
@@ -157,13 +208,40 @@ async def process_raw_event_message(db: Session, message: RawEventMessage, publi
     db.commit()
 
 
-def _with_trusted_tenant(event, tenant_id: str):
-    raw_tenant_id = event.tenant_id
+def _with_trusted_tenant(event, tenant_id: str, raw_tenant_id: str | None = None):
     unmapped = dict(event.unmapped)
-    if raw_tenant_id != tenant_id:
+    if raw_tenant_id is not None and raw_tenant_id != tenant_id:
         unmapped["raw_tenant_id"] = raw_tenant_id
         unmapped["tenant_id_source"] = "authenticated_context"
     return event.model_copy(update={"tenant_id": tenant_id, "unmapped": unmapped})
+
+
+def _declared_raw_tenant_id(record: dict) -> str | None:
+    return (
+        normalize_empty(record.get("tenant_id"))
+        or normalize_empty(get_nested(record, "tenant.id"))
+        or normalize_empty(get_nested(record, "organization.id"))
+    )
+
+
+def _record_tenant_mismatch_audit(db: Session, message: RawEventMessage, event_id: str, raw_tenant_id: str | None) -> None:
+    if raw_tenant_id is None or raw_tenant_id == message.tenant_id:
+        return
+    record_audit_log(
+        db,
+        tenant_id=message.tenant_id,
+        action="tenant_mismatch_detected",
+        actor="system",
+        target_type="raw_event",
+        target_id=event_id,
+        metadata={
+            "batch_id": message.batch_id,
+            "source_name": message.source_name,
+            "line_number": message.line_number,
+            "raw_tenant_id": raw_tenant_id,
+            "trusted_tenant_id": message.tenant_id,
+        },
+    )
 
 
 def _normalized_event_exists(db: Session, batch_id: int, event_id: str) -> bool:
@@ -187,7 +265,7 @@ async def _record_processing_error(
             raw_line=message.raw_line[:5000],
         )
     )
-    _mark_batch_progress(db, message.batch_id, normalized_delta=0, error_delta=1)
+    _mark_batch_progress(db, message.batch_id, tenant_id=message.tenant_id, normalized_delta=0, error_delta=1)
 
     if publisher is not None:
         dlq_message = DeadLetterMessage(
@@ -210,10 +288,11 @@ async def _record_processing_error(
     db.commit()
 
 
-def _mark_batch_progress(db: Session, batch_id: int, normalized_delta: int, error_delta: int) -> None:
+def _mark_batch_progress(db: Session, batch_id: int, tenant_id: str, normalized_delta: int, error_delta: int) -> None:
     batch = db.get(IngestionBatch, batch_id)
     if batch is None:
         return
+    previous_status = batch.status
     batch.normalized_records += normalized_delta
     batch.error_records += error_delta
 
@@ -221,6 +300,22 @@ def _mark_batch_progress(db: Session, batch_id: int, normalized_delta: int, erro
     if batch.total_records > 0 and processed >= batch.total_records:
         batch.status = "completed"
         batch.completed_at = datetime.now(timezone.utc)
+        if previous_status != "completed":
+            record_audit_log(
+                db,
+                tenant_id=tenant_id,
+                action="ingest_batch_completed",
+                actor="system",
+                target_type="ingestion_batch",
+                target_id=str(batch.id),
+                metadata={
+                    "source_name": batch.source_name,
+                    "mode": "async",
+                    "total_records": batch.total_records,
+                    "normalized_records": batch.normalized_records,
+                    "error_records": batch.error_records,
+                },
+            )
     else:
         batch.status = "running"
 

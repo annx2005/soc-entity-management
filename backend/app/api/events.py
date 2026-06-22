@@ -26,10 +26,10 @@ async def ingest_file(
         raise HTTPException(status_code=400, detail="Provide either file_path or file upload")
     if file is not None:
         content = await file.read()
-        batch = ingest_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id)
+        batch = ingest_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id, actor=context.email)
     else:
         try:
-            batch = ingest_jsonl_path(db, file_path or "", tenant_id=tenant_id)
+            batch = ingest_jsonl_path(db, file_path or "", tenant_id=tenant_id, actor=context.email)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     return IngestFileResponse(
@@ -55,9 +55,9 @@ async def ingest_file_async(
     try:
         if file is not None:
             content = await file.read()
-            batch = await enqueue_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id)
+            batch = await enqueue_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id, actor=context.email)
         else:
-            batch = await enqueue_jsonl_path(db, file_path or "", tenant_id=tenant_id)
+            batch = await enqueue_jsonl_path(db, file_path or "", tenant_id=tenant_id, actor=context.email)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

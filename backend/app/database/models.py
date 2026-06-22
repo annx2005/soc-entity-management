@@ -179,9 +179,16 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[Optional[str]] = mapped_column(String(255), index=True, nullable=True)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     actor: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
     target_type: Mapped[str] = mapped_column(String(100), nullable=False)
     target_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    __table_args__ = (
+        Index("idx_audit_logs_tenant_created_at", "tenant_id", "created_at"),
+        Index("idx_audit_logs_tenant_action", "tenant_id", "action"),
+        Index("idx_audit_logs_target", "target_type", "target_id"),
+    )

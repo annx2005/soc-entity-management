@@ -504,10 +504,15 @@
   overflow: auto;
 }
 
+.detail-stack,
 .detail-grid {
   display: grid;
   gap: 14px;
   padding: 14px;
+}
+
+.detail-grid {
+  padding: 0;
 }
 
 .entity-summary,
@@ -673,6 +678,56 @@
   font-size: 12px;
 }
 
+.audit-panel .notice {
+  margin-top: 12px;
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.audit-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) minmax(130px, auto);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border-radius: 6px;
+  background: #f8faf9;
+  color: #34443d;
+}
+
+.audit-row strong,
+.audit-row span,
+.audit-row small,
+.audit-row time {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-row strong {
+  color: #17211d;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.audit-row span,
+.audit-row small,
+.audit-row time {
+  color: #68746f;
+  font-size: 12px;
+}
+
+.audit-row > div:last-child {
+  text-align: right;
+}
+
 .empty-state {
   min-height: 120px;
   font-size: 13px;
@@ -730,7 +785,12 @@
 
   .filters,
   .import-preview,
+  .audit-row,
   .relationship-row {
     grid-template-columns: 1fr;
+  }
+
+  .audit-row > div:last-child {
+    text-align: left;
   }
 }
