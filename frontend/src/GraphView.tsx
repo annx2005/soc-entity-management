@@ -81,6 +81,7 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
             'border-width': '4px',
             height: '46px',
             width: '46px',
+            'text-wrap': 'none',
           },
         },
       ],
