@@ -91,6 +91,16 @@ export async function getGraph(token: string, entityId: string, hops = 2): Promi
   return request<GraphResponse>(`/api/graph/${encodeURIComponent(entityId)}?hops=${hops}&limit=200`, undefined, token)
 }
 
+export async function findPath(token: string, sourceId: string, targetId: string, maxHops = 4): Promise<GraphResponse> {
+  const params = new URLSearchParams({
+    source_id: sourceId,
+    target_id: targetId,
+    max_hops: String(maxHops),
+    limit: '50',
+  })
+  return request<GraphResponse>(`/api/graph/path?${params.toString()}`, undefined, token)
+}
+
 export async function ingestFile(
   token: string,
   input: { file?: File | null; filePath?: string; asyncMode: boolean },

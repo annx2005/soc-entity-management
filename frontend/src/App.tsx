@@ -25,6 +25,7 @@ import type { FormEvent } from 'react'
 import './App.css'
 import {
   clearStoredToken,
+  findPath,
   getEntity,
   getGraph,
   getIngestBatch,
@@ -95,6 +96,7 @@ function App() {
   const [appError, setAppError] = useState<string | null>(null)
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL)
   const [auditRefreshKey, setAuditRefreshKey] = useState(0)
+  const [graphHops, setGraphHops] = useState(2)
 
   const refreshEntities = useCallback(async () => {
     if (!token) return
@@ -159,7 +161,7 @@ function App() {
 
     let cancelled = false
     setDetail((current) => ({ ...current, loading: true, error: null }))
-    Promise.all([getEntity(token, selectedEntityId), listRelationships(token, selectedEntityId), getGraph(token, selectedEntityId)])
+    Promise.all([getEntity(token, selectedEntityId), listRelationships(token, selectedEntityId), getGraph(token, selectedEntityId, graphHops)])
       .then(([entity, relationships, graph]) => {
         if (!cancelled) setDetail({ entity, relationships, graph, loading: false, error: null })
       })
@@ -170,7 +172,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [selectedEntityId, token])
+  }, [graphHops, selectedEntityId, token])
 
   const selectedEntity = detail.entity ?? entities.find((entity) => entity.id === selectedEntityId) ?? null
   const stats = useMemo(() => buildStats(entities), [entities])
@@ -353,7 +355,14 @@ function App() {
         <section className="detail-pane">
           <div className="detail-stack">
             {selectedEntity ? (
-              <EntityDetail entity={selectedEntity} detail={detail} />
+              <EntityDetail
+                entity={selectedEntity}
+                detail={detail}
+                token={token}
+                visibleEntities={entities}
+                graphHops={graphHops}
+                onGraphHopsChange={setGraphHops}
+              />
             ) : (
               <div className="empty-detail">
                 <CircleDot size={22} />
@@ -685,10 +694,58 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
   )
 }
 
-function EntityDetail({ entity, detail }: { entity: Entity; detail: DetailState }) {
+function EntityDetail({
+  entity,
+  detail,
+  token,
+  visibleEntities,
+  graphHops,
+  onGraphHopsChange,
+}: {
+  entity: Entity
+  detail: DetailState
+  token: string
+  visibleEntities: Entity[]
+  graphHops: number
+  onGraphHopsChange: (hops: number) => void
+}) {
   const enrichment = entity.properties.enrichment
   const enrichmentRows = isRecord(enrichment) ? Object.entries(enrichment) : []
   const properties = Object.entries(entity.properties).filter(([key]) => key !== 'enrichment')
+  const [targetId, setTargetId] = useState('')
+  const [pathMaxHops, setPathMaxHops] = useState(4)
+  const [pathGraph, setPathGraph] = useState<GraphResponse | null>(null)
+  const [pathLoading, setPathLoading] = useState(false)
+  const [pathError, setPathError] = useState<string | null>(null)
+  const [pathSearched, setPathSearched] = useState(false)
+
+  useEffect(() => {
+    setTargetId('')
+    setPathGraph(null)
+    setPathError(null)
+    setPathSearched(false)
+  }, [entity.id])
+
+  async function handleFindPath(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const normalizedTargetId = targetId.trim()
+    if (!normalizedTargetId) {
+      setPathError('Enter a target entity id.')
+      return
+    }
+
+    setPathLoading(true)
+    setPathError(null)
+    setPathSearched(true)
+    try {
+      setPathGraph(await findPath(token, entity.id, normalizedTargetId, pathMaxHops))
+    } catch (error) {
+      setPathGraph(null)
+      setPathError(messageFrom(error))
+    } finally {
+      setPathLoading(false)
+    }
+  }
 
   return (
     <div className="detail-grid">
@@ -709,10 +766,71 @@ function EntityDetail({ entity, detail }: { entity: Entity; detail: DetailState 
 
       <section className="graph-section">
         <div className="section-head">
-          <h3>Graph</h3>
-          <span>{detail.graph?.nodes.length ?? 0} nodes</span>
+          <div>
+            <h3>Graph</h3>
+            <span>{detail.graph?.nodes.length ?? 0} nodes</span>
+          </div>
+          <label className="hop-select">
+            <Filter size={15} />
+            <select value={graphHops} onChange={(event) => onGraphHopsChange(Number(event.target.value))}>
+              {[1, 2, 3, 4].map((hops) => (
+                <option value={hops} key={hops}>
+                  {hops} hop{hops > 1 ? 's' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <GraphView graph={detail.graph} selectedEntityId={entity.id} />
+      </section>
+
+      <section className="path-section panel">
+        <div className="section-head">
+          <div>
+            <h3>Path finding</h3>
+            <span>{pathGraph ? `${pathGraph.nodes.length} nodes` : 'Entity to entity'}</span>
+          </div>
+          {pathLoading ? <Activity size={15} className="spin" /> : null}
+        </div>
+        <form className="path-form" onSubmit={(event) => void handleFindPath(event)}>
+          <label>
+            <Search size={15} />
+            <input
+              value={targetId}
+              onChange={(event) => setTargetId(event.target.value)}
+              placeholder="Target entity id"
+              list="visible-entity-targets"
+            />
+            <datalist id="visible-entity-targets">
+              {visibleEntities
+                .filter((item) => item.id !== entity.id)
+                .map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.value}
+                  </option>
+                ))}
+            </datalist>
+          </label>
+          <label>
+            <Filter size={15} />
+            <select value={pathMaxHops} onChange={(event) => setPathMaxHops(Number(event.target.value))}>
+              {[1, 2, 3, 4].map((hops) => (
+                <option value={hops} key={hops}>
+                  {hops} hop{hops > 1 ? 's' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" className="primary-button compact" disabled={pathLoading}>
+            <Search size={15} />
+            <span>Find</span>
+          </button>
+        </form>
+        {pathError ? <div className="notice error">{pathError}</div> : null}
+        {pathGraph && pathGraph.nodes.length > 0 ? <GraphView graph={pathGraph} selectedEntityId={entity.id} /> : null}
+        {pathSearched && !pathLoading && !pathError && (!pathGraph || pathGraph.nodes.length === 0) ? (
+          <div className="empty-state compact">No path found</div>
+        ) : null}
       </section>
 
       <section className="info-columns">

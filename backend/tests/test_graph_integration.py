@@ -6,7 +6,9 @@ import os
 import pytest
 from neo4j import AsyncGraphDatabase
 
+from app.entities.schemas import Entity, EntityType
 from app.graph.repository import GraphRepository
+from app.graph.schemas import RelationshipCandidate
 from app.graph.service import GraphService
 from app.normalization.normalizer import normalize_event
 
@@ -62,8 +64,22 @@ async def _run_graph_repository_integration(uri: str) -> None:
         assert len(relationships) == 1
         assert relationships[0].relationship_type == "LOGGED_IN_TO"
         assert relationships[0].count == 1
+
+        await _seed_entity_chain(repo, event)
+        graph = await service.get_graph(tenant_id, "chain-user", hops=3, limit=50)
+        path = await service.find_path(tenant_id, "chain-user", "chain-domain", max_hops=4, limit=10)
+        cross_tenant_path = await service.find_path(tenant_id, "chain-user", "other-tenant-domain", max_hops=4, limit=10)
+
+        graph_entity_ids = {node.properties["id"] for node in graph.nodes}
+        path_entity_ids = {node.properties["id"] for node in path.nodes}
+        assert "chain-domain" in graph_entity_ids
+        assert path_entity_ids == {"chain-user", "chain-host", "chain-ip", "chain-domain"}
+        assert len(path.edges) == 3
+        assert cross_tenant_path.nodes == []
+        assert cross_tenant_path.edges == []
     finally:
         await _delete_test_tenant(driver, tenant_id)
+        await _delete_test_tenant(driver, "tenant-integration-other")
         await driver.close()
 
 
@@ -77,3 +93,82 @@ async def _delete_test_tenant(driver, tenant_id: str) -> None:
             """,
             tenant_id=tenant_id,
         )
+
+
+async def _seed_entity_chain(repo: GraphRepository, event) -> None:
+    observed_at = "2026-07-02T14:50:00Z"
+    entities = [
+        Entity(
+            id="chain-user",
+            type=EntityType.USER,
+            value="chain-user",
+            tenant_id=event.tenant_id,
+            first_seen=observed_at,
+            last_seen=observed_at,
+            source="integration-test",
+        ),
+        Entity(
+            id="chain-host",
+            type=EntityType.HOST,
+            value="chain-host",
+            tenant_id=event.tenant_id,
+            first_seen=observed_at,
+            last_seen=observed_at,
+            source="integration-test",
+        ),
+        Entity(
+            id="chain-ip",
+            type=EntityType.IP,
+            value="10.20.30.40",
+            tenant_id=event.tenant_id,
+            first_seen=observed_at,
+            last_seen=observed_at,
+            source="integration-test",
+        ),
+        Entity(
+            id="chain-domain",
+            type=EntityType.DOMAIN,
+            value="chain.example",
+            tenant_id=event.tenant_id,
+            first_seen=observed_at,
+            last_seen=observed_at,
+            source="integration-test",
+        ),
+        Entity(
+            id="other-tenant-domain",
+            type=EntityType.DOMAIN,
+            value="other.example",
+            tenant_id="tenant-integration-other",
+            first_seen=observed_at,
+            last_seen=observed_at,
+            source="integration-test",
+        ),
+    ]
+    for entity in entities:
+        await repo.upsert_entity(entity)
+
+    candidates = [
+        RelationshipCandidate(
+            relationship_type="LOGGED_IN_TO",
+            from_id="chain-user",
+            to_id="chain-host",
+            evidence_ref=event.event_id,
+            observed_at=observed_at,
+        ),
+        RelationshipCandidate(
+            relationship_type="USED_IP",
+            from_id="chain-host",
+            to_id="chain-ip",
+            evidence_ref=event.event_id,
+            observed_at=observed_at,
+        ),
+        RelationshipCandidate(
+            relationship_type="RESOLVED_TO",
+            from_id="chain-ip",
+            to_id="chain-domain",
+            evidence_ref=event.event_id,
+            observed_at=observed_at,
+        ),
+    ]
+    for candidate in candidates:
+        await repo.upsert_relationship(event.tenant_id, candidate)

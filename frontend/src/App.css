@@ -71,7 +71,9 @@
 
 .login-panel label,
 .filters label,
-.import-form label {
+.import-form label,
+.path-form label,
+.hop-select {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -86,7 +88,10 @@
 .login-panel input,
 .filters input,
 .filters select,
-.import-form input:not([type="checkbox"]) {
+.import-form input:not([type="checkbox"]),
+.path-form input,
+.path-form select,
+.hop-select select {
   min-width: 0;
   width: 100%;
   height: 40px;
@@ -595,6 +600,16 @@
   margin-bottom: 8px;
 }
 
+.hop-select {
+  width: 118px;
+  height: 36px;
+  padding: 0 8px;
+}
+
+.hop-select select {
+  height: 34px;
+}
+
 .graph-canvas,
 .graph-empty {
   min-height: 320px;
@@ -624,6 +639,27 @@
 
 .panel {
   padding: 14px;
+}
+
+.path-section {
+  display: grid;
+  gap: 12px;
+}
+
+.path-section .graph-canvas,
+.path-section .graph-empty {
+  min-height: 260px;
+}
+
+.path-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.path-form label {
+  padding: 0 10px;
 }
 
 .kv-list {
@@ -785,6 +821,7 @@
 
   .filters,
   .import-preview,
+  .path-form,
   .audit-row,
   .relationship-row {
     grid-template-columns: 1fr;

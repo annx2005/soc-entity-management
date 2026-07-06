@@ -23,6 +23,7 @@ from app.ocsf.schemas import OCSFEvent
 
 
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
+OTHER_TENANT_ID = "00000000-0000-0000-0000-000000000002"
 
 
 def base_record(event_id: str, eventdata: dict) -> dict:
@@ -229,6 +230,200 @@ def test_entities_api_uses_tenant_context_and_returns_404_cross_tenant() -> None
     assert cross_tenant_response.status_code == 404
 
 
+def test_entities_api_list_omits_entities_from_other_tenants() -> None:
+    client = graph_test_client(
+        FakeApiGraphService(
+            entities={
+                TENANT_ID: {
+                    "entity-a": EntityResponse(
+                        id="entity-a",
+                        tenant_id=TENANT_ID,
+                        entity_type="ip",
+                        value="1.2.3.4",
+                    )
+                },
+                OTHER_TENANT_ID: {
+                    "entity-b": EntityResponse(
+                        id="entity-b",
+                        tenant_id=OTHER_TENANT_ID,
+                        entity_type="host",
+                        value="workstation-b",
+                    )
+                },
+            }
+        )
+    )
+
+    response = client.get("/api/entities", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ["entity-a"]
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("/api/entities/entity-a/relationships", 200),
+        ("/api/entities/entity-a/evidence", 200),
+        ("/api/graph/entity-a", 200),
+        ("/api/entities/entity-b/relationships", 404),
+        ("/api/entities/entity-b/evidence", 404),
+        ("/api/graph/entity-b", 404),
+    ],
+)
+def test_entity_subresources_enforce_tenant_isolation(path: str, expected_status: int) -> None:
+    client = graph_test_client(
+        FakeApiGraphService(
+            entities={
+                TENANT_ID: {
+                    "entity-a": EntityResponse(
+                        id="entity-a",
+                        tenant_id=TENANT_ID,
+                        entity_type="ip",
+                        value="1.2.3.4",
+                    )
+                },
+                OTHER_TENANT_ID: {
+                    "entity-b": EntityResponse(
+                        id="entity-b",
+                        tenant_id=OTHER_TENANT_ID,
+                        entity_type="host",
+                        value="workstation-b",
+                    )
+                },
+            }
+        )
+    )
+
+    response = client.get(path, headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == expected_status
+
+
+@pytest.mark.parametrize("hops", [3, 4])
+def test_graph_api_accepts_multi_hop_depth(hops: int) -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get(f"/api/graph/entity-a?hops={hops}", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 200
+    assert graph_service.graph_calls[-1]["hops"] == hops
+
+
+def test_graph_api_rejects_too_many_hops() -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get("/api/graph/entity-a?hops=5", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 422
+
+
+def test_graph_path_api_returns_graph_response() -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="user",
+                    value="alice",
+                ),
+                "entity-b": EntityResponse(
+                    id="entity-b",
+                    tenant_id=TENANT_ID,
+                    entity_type="domain",
+                    value="example.com",
+                ),
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get(
+        "/api/graph/path?source_id=entity-a&target_id=entity-b&max_hops=4",
+        headers={"Authorization": "Bearer test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"nodes": [], "edges": []}
+    assert graph_service.path_calls[-1]["source_id"] == "entity-a"
+    assert graph_service.path_calls[-1]["target_id"] == "entity-b"
+    assert graph_service.path_calls[-1]["max_hops"] == 4
+
+
+@pytest.mark.parametrize(
+    ("source_id", "target_id"),
+    [
+        ("entity-a", "entity-b"),
+        ("entity-b", "entity-a"),
+    ],
+)
+def test_graph_path_api_returns_404_for_cross_tenant_endpoint(source_id: str, target_id: str) -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            },
+            OTHER_TENANT_ID: {
+                "entity-b": EntityResponse(
+                    id="entity-b",
+                    tenant_id=OTHER_TENANT_ID,
+                    entity_type="host",
+                    value="workstation-b",
+                )
+            },
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get(
+        f"/api/graph/path?source_id={source_id}&target_id={target_id}",
+        headers={"Authorization": "Bearer test"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_graph_path_api_rejects_platform_scope() -> None:
+    client = graph_test_client(FakeApiGraphService(), platform=True)
+
+    response = client.get(
+        "/api/graph/path?source_id=entity-a&target_id=entity-b",
+        headers={"Authorization": "Bearer test"},
+    )
+
+    assert response.status_code == 403
+
+
 def test_entities_api_rejects_platform_scope() -> None:
     client = graph_test_client(FakeApiGraphService(), platform=True)
 
@@ -312,6 +507,8 @@ class FakeAuditLogger:
 class FakeApiGraphService:
     def __init__(self, entities: dict[str, dict[str, EntityResponse]] | None = None) -> None:
         self.entities = entities or {}
+        self.graph_calls = []
+        self.path_calls = []
 
     async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100, offset: int = 0):
         return list(self.entities.get(tenant_id, {}).values())[offset : offset + limit]
@@ -326,6 +523,13 @@ class FakeApiGraphService:
         return []
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200):
+        self.graph_calls.append({"tenant_id": tenant_id, "entity_id": entity_id, "hops": hops, "limit": limit})
+        return GraphResponse(nodes=[], edges=[])
+
+    async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50):
+        self.path_calls.append(
+            {"tenant_id": tenant_id, "source_id": source_id, "target_id": target_id, "max_hops": max_hops, "limit": limit}
+        )
         return GraphResponse(nodes=[], edges=[])
 
 

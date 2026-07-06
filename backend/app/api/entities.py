@@ -62,12 +62,27 @@ async def get_entity_evidence(
     return await graph.list_evidence(tenant_id, entity_id, limit=limit)
 
 
+@router.get("/graph/path", response_model=GraphResponse)
+async def find_graph_path(
+    context: Annotated[TenantContext, Depends(get_tenant_context)],
+    graph: Annotated[GraphService, Depends(get_graph_service)],
+    source_id: Annotated[str, Query(min_length=1)],
+    target_id: Annotated[str, Query(min_length=1)],
+    max_hops: Annotated[int, Query(ge=1, le=4)] = 4,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> GraphResponse:
+    tenant_id = _tenant_id_or_forbidden(context)
+    await _require_entity(graph, tenant_id, source_id)
+    await _require_entity(graph, tenant_id, target_id)
+    return await graph.find_path(tenant_id, source_id, target_id, max_hops=max_hops, limit=limit)
+
+
 @router.get("/graph/{entity_id}", response_model=GraphResponse)
 async def get_graph(
     entity_id: str,
     context: Annotated[TenantContext, Depends(get_tenant_context)],
     graph: Annotated[GraphService, Depends(get_graph_service)],
-    hops: Annotated[int, Query(ge=1, le=2)] = 1,
+    hops: Annotated[int, Query(ge=1, le=4)] = 1,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> GraphResponse:
     tenant_id = _tenant_id_or_forbidden(context)
