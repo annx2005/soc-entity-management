@@ -10,10 +10,11 @@ from fastapi.testclient import TestClient
 
 from app.api.entities import router as entities_router
 from app.auth.dependencies import TenantContext, get_tenant_context
-from app.entities import extract_entities
+from app.entities import EntityType, extract_entities
 from app.graph.constants import label_for_entity_type, validate_relationship_type
 from app.graph.dependencies import get_graph_service
 from app.graph.inference import infer_relationships
+from app.graph.repository import _merge_properties
 from app.graph.kafka_service import process_ocsf_event_message
 from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphResponse, RelationshipResponse
 from app.graph.service import GraphService
@@ -47,10 +48,25 @@ def base_record(event_id: str, eventdata: dict) -> dict:
 
 def test_graph_allowlists_reject_unknown_dynamic_values() -> None:
     assert label_for_entity_type(extract_entities(auth_event())[0].type) == "User"
+    assert label_for_entity_type(EntityType.URL) == "URL"
     assert validate_relationship_type("LOGGED_IN_TO") == "LOGGED_IN_TO"
 
     with pytest.raises(ValueError):
         validate_relationship_type("MATCH (n) DETACH DELETE n")
+
+
+def test_merge_properties_preserves_existing_values_and_unions_source_fields() -> None:
+    merged = _merge_properties(
+        {"source_field": "actor.user.email", "source_fields": ["actor.user.email"], "domain": "example.com"},
+        {"source_field": "email.sender", "source_fields": ["email.sender"], "domain": None, "reputation": "known"},
+    )
+
+    assert merged == {
+        "source_field": "actor.user.email",
+        "source_fields": ["actor.user.email", "email.sender"],
+        "domain": "example.com",
+        "reputation": "known",
+    }
 
 
 def test_infer_network_relationships_uses_src_and_dst_ip_roles() -> None:

@@ -128,6 +128,77 @@ def test_file_hash_extracts_canonical_lowercase() -> None:
     }
 
 
+def test_extracts_url_from_command_line_and_normalizes_canonical_form() -> None:
+    event = normalize_event(
+        base_record(
+            "1",
+            {
+                "image": r"C:\Windows\System32\curl.exe",
+                "commandLine": r'curl "HTTPS://GitHub.COM:443/security/advisories?b=2&a=1#fragment"',
+            },
+        )
+    )
+
+    urls = [entity for entity in extract_entities(event) if entity.type == EntityType.URL]
+
+    assert [entity.value for entity in urls] == ["https://github.com:443/security/advisories?b=2&a=1"]
+    assert urls[0].properties["host"] == "github.com"
+    assert urls[0].properties["source_field"] == "process.cmd_line"
+
+
+def test_extracts_email_cve_and_cloud_resource_from_normalized_fields() -> None:
+    event = make_empty_event(
+        actor={"user": {"email": "Analyst@Example.COM"}},
+        finding={"desc": "Exploit observed for cve-2026-41611"},
+        cloud={"provider": "AWS", "account_id": "123456789012", "region": "ap-southeast-1"},
+        resource={"arn": "arn:aws:s3:::soc-logs", "type": "S3_Bucket", "name": "soc-logs"},
+    )
+
+    assert entity_values(event, EntityType.EMAIL) == {"analyst@example.com"}
+    assert entity_values(event, EntityType.CVE) == {"CVE-2026-41611"}
+
+    cloud_resources = [entity for entity in extract_entities(event) if entity.type == EntityType.CLOUD_RESOURCE]
+    assert [entity.value for entity in cloud_resources] == ["arn:aws:s3:::soc-logs"]
+    assert cloud_resources[0].properties["provider"] == "aws"
+    assert cloud_resources[0].properties["account_id"] == "123456789012"
+    assert cloud_resources[0].properties["resource_type"] == "s3_bucket"
+
+
+def test_extracts_cve_from_vulnerability_finding() -> None:
+    event = normalize_event(
+        {
+            "id": "evt-vuln",
+            "tenant_id": "tenant-acme",
+            "timestamp": "2026-07-03T02:03:00Z",
+            "agent": {"id": "101", "ip": "10.10.1.24", "name": "acme-ws-01"},
+            "data": {
+                "vulnerability": {
+                    "cve": "cve-2026-41611",
+                    "package": {"name": "Microsoft Visual Studio Code (User)"},
+                    "severity": "High",
+                    "status": "Active",
+                }
+            },
+        }
+    )
+
+    assert entity_values(event, EntityType.CVE) == {"CVE-2026-41611"}
+
+
+def test_dedupes_duplicate_email_sources_and_merges_source_fields() -> None:
+    event = make_empty_event(
+        actor={"user": {"email": "SOC@Example.COM"}},
+        email={"sender": "soc@example.com", "recipients": ["SOC@example.com"]},
+    )
+
+    emails = [entity for entity in extract_entities(event) if entity.type == EntityType.EMAIL]
+
+    assert len(emails) == 1
+    assert emails[0].value == "soc@example.com"
+    assert emails[0].properties["source_field"] == "actor.user.email"
+    assert emails[0].properties["source_fields"] == ["actor.user.email", "email.sender", "email.recipients"]
+
+
 def test_dedupes_duplicate_host_sources_in_same_event() -> None:
     event = normalize_event(
         base_record(
