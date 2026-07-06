@@ -31,8 +31,12 @@ def infer_relationships(event: OCSFEvent, entities: list[Entity]) -> list[Relati
         host = _first_by_type(entities, EntityType.HOST, "device.hostname") or _first_by_type(
             entities, EntityType.HOST, "dst_endpoint.hostname"
         )
-        relationship_type = "LOGGED_IN_TO" if _is_successful_auth(event) else "FAILED_LOGON_TO"
-        add(relationship_type, user, host)
+        source_ip = _first_by_type(entities, EntityType.IP, "src_endpoint.ip")
+        successful_auth = _is_successful_auth(event)
+        user_relationship_type = "LOGGED_IN_TO" if successful_auth else "FAILED_LOGON_TO"
+        ip_relationship_type = "AUTHENTICATED_TO" if successful_auth else "ATTEMPTED_LOGON_TO"
+        add(user_relationship_type, user, host)
+        add(ip_relationship_type, source_ip, host)
 
     elif event.class_uid == 4001:
         host = _first_by_type(entities, EntityType.HOST, "device.hostname")

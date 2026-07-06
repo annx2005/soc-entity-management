@@ -103,10 +103,30 @@ def test_infer_all_initial_relationship_rules() -> None:
         )
     )
 
-    assert [rel.relationship_type for rel in infer_relationships(success, extract_entities(success))] == ["LOGGED_IN_TO"]
-    assert [rel.relationship_type for rel in infer_relationships(failure, extract_entities(failure))] == ["FAILED_LOGON_TO"]
+    assert [rel.relationship_type for rel in infer_relationships(success, extract_entities(success))] == [
+        "LOGGED_IN_TO",
+        "AUTHENTICATED_TO",
+    ]
+    assert [rel.relationship_type for rel in infer_relationships(failure, extract_entities(failure))] == [
+        "FAILED_LOGON_TO",
+        "ATTEMPTED_LOGON_TO",
+    ]
     assert {rel.relationship_type for rel in infer_relationships(dns, extract_entities(dns))} == {"RESOLVED_DOMAIN", "RESOLVED_TO"}
     assert {rel.relationship_type for rel in infer_relationships(process, extract_entities(process))} == {"EXECUTED_ON", "HAS_HASH", "RAN_AS"}
+
+
+def test_infer_auth_relationships_connect_source_ip_to_host() -> None:
+    event = auth_event("4624")
+    entities = extract_entities(event)
+
+    relationships = infer_relationships(event, entities)
+
+    authenticated_to = next(relationship for relationship in relationships if relationship.relationship_type == "AUTHENTICATED_TO")
+    entity_by_id = {entity.id: entity for entity in entities}
+    assert entity_by_id[authenticated_to.from_id].type.value == "ip"
+    assert entity_by_id[authenticated_to.from_id].value == "127.0.0.1"
+    assert entity_by_id[authenticated_to.to_id].type.value == "host"
+    assert entity_by_id[authenticated_to.to_id].value == "xuan-an"
 
 
 def test_graph_service_is_idempotent_with_unique_event_evidence() -> None:
@@ -121,8 +141,8 @@ def test_graph_service_is_idempotent_with_unique_event_evidence() -> None:
     assert len(repo.events) == 1
     assert len(repo.entities) == first.entities
     assert len(repo.observations) == first.observations
-    assert len(repo.relationship_facts) == 1
-    assert next(iter(repo.relationship_facts.values()))["count"] == 1
+    assert len(repo.relationship_facts) == 2
+    assert all(fact["count"] == 1 for fact in repo.relationship_facts.values())
 
 
 def test_graph_service_enriches_entities_before_upsert_and_keeps_relationship_inference() -> None:
@@ -158,11 +178,12 @@ def test_graph_service_caps_unique_sample_evidence_refs() -> None:
         event.event_id = f"evt-{index:03d}"
         asyncio.run(service.process_event(event))
 
-    fact = next(iter(repo.relationship_facts.values()))
-    assert fact["count"] == 60
-    assert len(fact["sample_evidence_refs"]) == 50
-    assert fact["sample_evidence_refs"][0] == "evt-010"
-    assert fact["sample_evidence_refs"][-1] == "evt-059"
+    assert len(repo.relationship_facts) == 2
+    for fact in repo.relationship_facts.values():
+        assert fact["count"] == 60
+        assert len(fact["sample_evidence_refs"]) == 50
+        assert fact["sample_evidence_refs"][0] == "evt-010"
+        assert fact["sample_evidence_refs"][-1] == "evt-059"
 
 
 def test_graph_service_audits_entity_and_relationship_upserts() -> None:
