@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "soc.fullname" . }}-kafka-init-topics
+  labels:
+    {{- include "soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-init-topics
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "soc.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kafka-init-topics
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kafka-init-topics
+          image: {{ .Values.kafka.image | quote }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "{{ include "soc.kafkaName" . }}:9092"
+            - name: KAFKA_RAW_EVENTS_TOPIC
+              value: {{ .Values.kafka.topics.rawEvents | quote }}
+            - name: KAFKA_NORMALIZED_EVENTS_TOPIC
+              value: {{ .Values.kafka.topics.normalizedEvents | quote }}
+            - name: KAFKA_OCSF_EVENTS_TOPIC
+              value: {{ .Values.kafka.topics.ocsfEvents | quote }}
+            - name: KAFKA_DEAD_LETTER_TOPIC
+              value: {{ .Values.kafka.topics.deadLetter | quote }}
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              for attempt in {1..60}; do
+                if /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 2
+              done
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --create --if-not-exists --topic "$KAFKA_RAW_EVENTS_TOPIC" --partitions 6 --replication-factor 1
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --create --if-not-exists --topic "$KAFKA_NORMALIZED_EVENTS_TOPIC" --partitions 6 --replication-factor 1
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --create --if-not-exists --topic "$KAFKA_OCSF_EVENTS_TOPIC" --partitions 6 --replication-factor 1
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --create --if-not-exists --topic "$KAFKA_DEAD_LETTER_TOPIC" --partitions 3 --replication-factor 1

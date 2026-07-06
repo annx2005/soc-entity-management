@@ -1,0 +1,10 @@
+project_id = "your-gcp-project-id"
+
+# Optional overrides
+# region                  = "asia-southeast1"
+# zone                    = "asia-southeast1-a"
+# github_repository       = "annx2005/soc-entity-management"
+# github_main_branch      = "main"
+# gke_cluster_name        = "soc-entity-management"
+# k8s_namespace           = "soc-entity-management"
+# ingress_static_ip_name  = "soc-entity-management-http-ip"

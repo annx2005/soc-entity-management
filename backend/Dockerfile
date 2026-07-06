@@ -9,6 +9,7 @@ COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend/app /app/app
+COPY data/enrichment /data/enrichment
 
 EXPOSE 8000
 

@@ -1,0 +1,21 @@
+global:
+  imageRegistry: example.invalid/soc-entity-management
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+
+ingress:
+  enabled: true
+  className: gce
+  staticIpName: soc-entity-management-http-ip
+
+postgresql:
+  storage:
+    size: 20Gi
+
+kafka:
+  storage:
+    size: 20Gi
+
+neo4j:
+  storage:
+    size: 20Gi

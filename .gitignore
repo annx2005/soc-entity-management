@@ -39,4 +39,13 @@ build/
 *.tmp
 *.swp
 
+# Terraform local state and variables
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+
 draft-docs/

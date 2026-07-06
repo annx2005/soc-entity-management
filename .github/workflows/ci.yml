@@ -89,6 +89,47 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
+  terraform-validate:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check
+
+      - name: Initialize Terraform without backend
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        run: terraform validate
+
+  helm-validate:
+    name: Helm validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm chart
+        run: helm lint charts/soc-entity-management
+
+      - name: Render Helm chart
+        run: helm template soc-entity-management charts/soc-entity-management -f charts/soc-entity-management/values-gke.yaml
+
   docker-build:
     name: Docker build
     runs-on: ubuntu-latest
@@ -105,3 +146,112 @@ jobs:
 
       - name: Build application images
         run: docker compose build backend frontend
+
+  deploy-gke:
+    name: Deploy to GKE
+    runs-on: ubuntu-latest
+    needs:
+      - backend-tests
+      - frontend-checks
+      - terraform-validate
+      - helm-validate
+      - docker-build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
+      GKE_LOCATION: ${{ vars.GKE_LOCATION }}
+      GAR_LOCATION: ${{ vars.GAR_LOCATION }}
+      GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
+      WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ vars.WIF_SERVICE_ACCOUNT }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      INGRESS_STATIC_IP_NAME: ${{ vars.INGRESS_STATIC_IP_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check deployment variables
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$GKE_CLUSTER"
+          test -n "$GKE_LOCATION"
+          test -n "$GAR_LOCATION"
+          test -n "$GAR_REPOSITORY"
+          test -n "$WIF_PROVIDER"
+          test -n "$WIF_SERVICE_ACCOUNT"
+          test -n "$K8S_NAMESPACE"
+          test -n "$INGRESS_STATIC_IP_NAME"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GAR_LOCATION}-docker.pkg.dev" --quiet
+
+      - name: Build and push images
+        env:
+          IMAGE_REGISTRY: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}
+        run: |
+          docker build -f backend/Dockerfile -t "$IMAGE_REGISTRY/backend:${GITHUB_SHA}" .
+          docker build -f frontend/Dockerfile -t "$IMAGE_REGISTRY/frontend:${GITHUB_SHA}" .
+          docker push "$IMAGE_REGISTRY/backend:${GITHUB_SHA}"
+          docker push "$IMAGE_REGISTRY/frontend:${GITHUB_SHA}"
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_LOCATION }}
+
+      - name: Deploy Helm release
+        env:
+          IMAGE_REGISTRY: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          ENRICHMENT_IPINFO_TOKEN: ${{ secrets.ENRICHMENT_IPINFO_TOKEN }}
+          ENRICHMENT_MALWARE_BAZAAR_AUTH_KEY: ${{ secrets.ENRICHMENT_MALWARE_BAZAAR_AUTH_KEY }}
+        run: |
+          test -n "$JWT_SECRET_KEY"
+          test -n "$POSTGRES_PASSWORD"
+          test -n "$NEO4J_PASSWORD"
+
+          helm upgrade --install soc-entity-management charts/soc-entity-management \
+            --namespace "$K8S_NAMESPACE" \
+            --create-namespace \
+            --wait \
+            --timeout 15m \
+            -f charts/soc-entity-management/values-gke.yaml \
+            --set-string global.imageRegistry="$IMAGE_REGISTRY" \
+            --set-string global.imageTag="$GITHUB_SHA" \
+            --set-string ingress.staticIpName="$INGRESS_STATIC_IP_NAME" \
+            --set-string secrets.jwtSecretKey="$JWT_SECRET_KEY" \
+            --set-string secrets.postgresPassword="$POSTGRES_PASSWORD" \
+            --set-string secrets.neo4jPassword="$NEO4J_PASSWORD" \
+            --set-string secrets.enrichmentIpinfoToken="$ENRICHMENT_IPINFO_TOKEN" \
+            --set-string secrets.enrichmentMalwareBazaarAuthKey="$ENRICHMENT_MALWARE_BAZAAR_AUTH_KEY"
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/soc-entity-management-backend --namespace "$K8S_NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/soc-entity-management-frontend --namespace "$K8S_NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/soc-entity-management-kafka-ingestion-worker --namespace "$K8S_NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/soc-entity-management-kafka-graph-worker --namespace "$K8S_NAMESPACE" --timeout=5m
