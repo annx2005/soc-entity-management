@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare backend env file
+        run: cp .env.example .env
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
