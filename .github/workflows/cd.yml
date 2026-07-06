@@ -90,27 +90,19 @@ jobs:
             if [ -n "$current_service" ] && [ "$current_service" != "$desired_service" ]; then
               echo "Migrating $name serviceName from $current_service to $desired_service"
               kubectl delete statefulset "$name" --namespace "$K8S_NAMESPACE" --cascade=orphan
-              kubectl delete pod "$pod_name" --namespace "$K8S_NAMESPACE" --ignore-not-found=true --wait=true --timeout=5m
             fi
-          }
 
-          clear_failed_pod() {
-            pod_name="$1"
-            phase="$(kubectl get pod "$pod_name" --namespace "$K8S_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-
-            if [ "$phase" = "Failed" ]; then
-              echo "Deleting failed pod $pod_name before Helm upgrade"
-              kubectl delete pod "$pod_name" --namespace "$K8S_NAMESPACE" --ignore-not-found=true --wait=true --timeout=5m
+            if kubectl get statefulset "$name" --namespace "$K8S_NAMESPACE" >/dev/null 2>&1; then
+              echo "Scaling $name to 0 so Helm recreates pods from the latest template"
+              kubectl scale statefulset "$name" --namespace "$K8S_NAMESPACE" --replicas=0
             fi
+
+            kubectl delete pod "$pod_name" --namespace "$K8S_NAMESPACE" --ignore-not-found=true --wait=true --timeout=5m
           }
 
           migrate_statefulset "soc-entity-management-postgresql" "soc-entity-management-postgresql-headless"
           migrate_statefulset "soc-entity-management-kafka" "soc-entity-management-kafka-headless"
           migrate_statefulset "soc-entity-management-neo4j" "soc-entity-management-neo4j-headless"
-
-          clear_failed_pod "soc-entity-management-postgresql-0"
-          clear_failed_pod "soc-entity-management-kafka-0"
-          clear_failed_pod "soc-entity-management-neo4j-0"
 
       - name: Deploy Helm release
         env:
