@@ -734,6 +734,104 @@
   padding: 0 0 12px;
 }
 
+.event-log-list {
+  display: grid;
+  gap: 12px;
+}
+
+.event-log-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #edf1ef;
+  border-radius: 10px;
+  background: #fbfcfb;
+}
+
+.event-log-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-log-head strong,
+.event-log-head span {
+  display: block;
+}
+
+.event-log-head strong {
+  color: #17211d;
+}
+
+.event-log-head span {
+  margin-top: 4px;
+  color: #68746f;
+  font-size: 12px;
+}
+
+.event-log-head time {
+  color: #56625d;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.event-log-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.event-log-fact {
+  padding: 10px;
+  border-radius: 8px;
+  background: #f2f6f3;
+}
+
+.event-log-fact span,
+.event-log-fact strong {
+  display: block;
+}
+
+.event-log-fact span {
+  color: #68746f;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.event-log-fact strong {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #17211d;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-log-raw {
+  border-top: 1px solid #edf1ef;
+  padding-top: 10px;
+}
+
+.event-log-raw summary {
+  cursor: pointer;
+  color: #24614c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.event-log-raw pre {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: #12211b;
+  color: #e7f0eb;
+  font-size: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .path-section {
   display: grid;
   gap: 12px;
@@ -964,6 +1062,10 @@
   .summary-times {
     min-width: 0;
   }
+
+  .event-log-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 640px) {
@@ -1008,13 +1110,15 @@
   .import-preview,
   .path-form,
   .audit-row,
+  .event-log-meta,
   .relationship-row,
   .relationship-meta,
   .evidence-row {
     grid-template-columns: 1fr;
   }
 
-  .audit-page-head {
+  .audit-page-head,
+  .event-log-head {
     align-items: flex-start;
     flex-direction: column;
   }

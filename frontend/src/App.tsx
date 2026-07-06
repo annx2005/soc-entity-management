@@ -90,7 +90,9 @@ const AUDIT_PAGE_SIZE = 20;
 function App() {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
   const [context, setContext] = useState<TenantContext | null>(null);
-  const [page, setPage] = useState<"entities" | "audit">("entities");
+  const [page, setPage] = useState<"entities" | "audit" | "events">(
+    "entities",
+  );
   const [entities, setEntities] = useState<Entity[]>([]);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [entityType, setEntityType] = useState<EntityType | "">("");
@@ -287,6 +289,14 @@ function App() {
               <ScrollText size={15} />
               <span>Audit log</span>
             </button>
+            <button
+              type="button"
+              className={page === "events" ? "active" : ""}
+              onClick={() => setPage("events")}
+            >
+              <FileText size={15} />
+              <span>Event log</span>
+            </button>
           </nav>
         </div>
         <button
@@ -468,9 +478,13 @@ function App() {
             </div>
           </section>
         </section>
-      ) : (
+      ) : page === "audit" ? (
         <section className="audit-workspace">
           <AuditLogPage token={token} refreshKey={auditRefreshKey} />
+        </section>
+      ) : (
+        <section className="audit-workspace">
+          <EventLogPage token={token} refreshKey={auditRefreshKey} />
         </section>
       )}
     </main>
@@ -652,6 +666,31 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
   const [logsLoading, setLogsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const loadBatchPreview = useCallback(async (
+    batchId = result?.batch_id,
+    refreshBatch = true,
+  ) => {
+    if (!batchId) return;
+    setLogsLoading(true);
+    setError(null);
+    try {
+      if (refreshBatch) {
+        const nextBatch = await getIngestBatch(batchId);
+        setResult(nextBatch);
+      }
+      const [nextNormalized, nextErrors] = await Promise.all([
+        listNormalizedEvents(token, { batchId, limit: 20 }),
+        listIngestErrors(batchId),
+      ]);
+      setNormalized(nextNormalized);
+      setErrors(nextErrors);
+    } catch (previewError) {
+      setError(messageFrom(previewError));
+    } finally {
+      setLogsLoading(false);
+    }
+  }, [result?.batch_id, token]);
+
   useEffect(() => {
     if (!result || result.status === "completed" || result.status === "failed")
       return;
@@ -689,7 +728,7 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [onFinished, result]);
+  }, [loadBatchPreview, onFinished, result]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -711,31 +750,6 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
       setError(messageFrom(submitError));
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function loadBatchPreview(
-    batchId = result?.batch_id,
-    refreshBatch = true,
-  ) {
-    if (!batchId) return;
-    setLogsLoading(true);
-    setError(null);
-    try {
-      if (refreshBatch) {
-        const nextBatch = await getIngestBatch(batchId);
-        setResult(nextBatch);
-      }
-      const [nextNormalized, nextErrors] = await Promise.all([
-        listNormalizedEvents(batchId),
-        listIngestErrors(batchId),
-      ]);
-      setNormalized(nextNormalized);
-      setErrors(nextErrors);
-    } catch (previewError) {
-      setError(messageFrom(previewError));
-    } finally {
-      setLogsLoading(false);
     }
   }
 
@@ -1299,6 +1313,124 @@ function AuditLogPage({
   );
 }
 
+function EventLogPage({
+  token,
+  refreshKey,
+}: {
+  token: string;
+  refreshKey: number;
+}) {
+  const [events, setEvents] = useState<NormalizedEvent[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadEvents = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const nextEvents = await listNormalizedEvents(token, {
+        limit: AUDIT_PAGE_SIZE + 1,
+        offset: page * AUDIT_PAGE_SIZE,
+      });
+      setEvents(nextEvents.slice(0, AUDIT_PAGE_SIZE));
+      setHasNextPage(nextEvents.length > AUDIT_PAGE_SIZE);
+    } catch (loadError) {
+      setError(messageFrom(loadError));
+    } finally {
+      setLoading(false);
+    }
+  }, [page, token]);
+
+  useEffect(() => {
+    void loadEvents();
+  }, [loadEvents, refreshKey]);
+
+  return (
+    <section className="audit-page panel">
+      <div className="audit-page-head">
+        <div>
+          <h1>Event log</h1>
+          <p>
+            Most recent processed events first · Page {page + 1} ·{" "}
+            {events.length} shown
+          </p>
+        </div>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => void loadEvents()}
+          aria-label="Refresh event log"
+          title="Refresh event log"
+        >
+          {loading ? (
+            <Activity size={15} className="spin" />
+          ) : (
+            <FileText size={15} />
+          )}
+        </button>
+      </div>
+      {error ? <div className="notice error">{error}</div> : null}
+      <div className="pagination-bar audit-pagination">
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => setPage((current) => Math.max(0, current - 1))}
+          disabled={page === 0 || loading}
+          aria-label="Previous event page"
+          title="Previous page"
+        >
+          <ChevronLeft size={17} />
+        </button>
+        <span>
+          {events.length > 0
+            ? `${page * AUDIT_PAGE_SIZE + 1}-${page * AUDIT_PAGE_SIZE + events.length}`
+            : "0-0"}
+        </span>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={() => setPage((current) => current + 1)}
+          disabled={!hasNextPage || loading}
+          aria-label="Next event page"
+          title="Next page"
+        >
+          <ChevronRight size={17} />
+        </button>
+      </div>
+      <div className="event-log-list">
+        {events.map((event) => (
+          <article className="event-log-card" key={event.id}>
+            <div className="event-log-head">
+              <div>
+                <strong>{formatNormalizedEventTitle(event)}</strong>
+                <span>{formatNormalizedEventSubtitle(event)}</span>
+              </div>
+              <time>{formatDate(event.created_at)}</time>
+            </div>
+            <div className="event-log-meta">
+              {buildNormalizedEventFacts(event).map(([label, value]) => (
+                <div className="event-log-fact" key={`${event.id}:${label}`}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+            <details className="event-log-raw">
+              <summary>Raw normalized event</summary>
+              <pre>{JSON.stringify(event.normalized_event, null, 2)}</pre>
+            </details>
+          </article>
+        ))}
+        {!loading && events.length === 0 ? (
+          <div className="empty-state compact">No processed events</div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="metric">
@@ -1469,6 +1601,99 @@ function formatEvidenceLabel(evidence: Evidence): string {
     (value): value is string => Boolean(value),
   );
   return parts.length > 0 ? parts.join(" · ") : "Event evidence";
+}
+
+function formatNormalizedEventTitle(event: NormalizedEvent): string {
+  const payload = event.normalized_event;
+  const finding = recordValue(payload.finding);
+  const process = recordValue(payload.process);
+  const actor = recordValue(payload.actor);
+  const actorUser = recordValue(actor?.user);
+  const file = recordValue(payload.file);
+  const query = recordValue(payload.query);
+  const device = recordValue(payload.device);
+
+  const findingTitle = stringFrom(finding?.title);
+  if (findingTitle) return findingTitle;
+
+  switch (event.event_type) {
+    case "windows_logon_success":
+      return `${stringFrom(actorUser?.name) || "User"} logged on to ${stringFrom(device?.hostname) || "host"}`;
+    case "windows_logon_failure":
+      return `${stringFrom(actorUser?.name) || "User"} failed logon on ${stringFrom(device?.hostname) || "host"}`;
+    case "process_execution":
+      return `${stringFrom(process?.name) || stringFrom(file?.name) || "Process"} executed`;
+    case "dns_query":
+      return `DNS query for ${stringFrom(query?.hostname) || "unknown host"}`;
+    case "network_connection":
+      return `${stringFrom(device?.hostname) || "Host"} network connection`;
+    default:
+      return formatAction(event.event_type);
+  }
+}
+
+function formatNormalizedEventSubtitle(event: NormalizedEvent): string {
+  const payload = event.normalized_event;
+  const parts = [
+    stringFrom(payload.class_name),
+    stringFrom(payload.activity_name),
+    event.source,
+    event.event_id,
+  ].filter((value): value is string => Boolean(value));
+  return parts.join(" · ");
+}
+
+function buildNormalizedEventFacts(event: NormalizedEvent): [string, string][] {
+  const payload = event.normalized_event;
+  const device = recordValue(payload.device);
+  const actor = recordValue(payload.actor);
+  const actorUser = recordValue(actor?.user);
+  const process = recordValue(payload.process);
+  const file = recordValue(payload.file);
+  const query = recordValue(payload.query);
+  const finding = recordValue(payload.finding);
+
+  const facts: [string, string | null][] = [
+    ["Event time", formatEpochMillis(payload.time)],
+    ["Host", stringFrom(device?.hostname)],
+    ["User", stringFrom(actorUser?.name)],
+    ["Process", stringFrom(process?.name) || stringFrom(file?.name)],
+    ["Query", stringFrom(query?.hostname)],
+    ["Severity", severityLabel(finding?.severity_id)],
+    ["MITRE", joinArray(finding?.mitre_ids)],
+    ["Source", event.source],
+  ];
+
+  return facts.reduce<[string, string][]>((rows, [label, value]) => {
+    if (value) rows.push([label, value]);
+    return rows;
+  }, []);
+}
+
+function formatEpochMillis(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return formatDate(new Date(value).toISOString());
+}
+
+function severityLabel(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return `P${value}`;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function stringFrom(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function joinArray(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const items = value.filter(
+    (item): item is string => typeof item === "string" && Boolean(item.trim()),
+  );
+  return items.length > 0 ? items.join(", ") : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

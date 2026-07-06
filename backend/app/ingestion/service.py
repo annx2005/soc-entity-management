@@ -130,9 +130,30 @@ def list_errors(db: Session, limit: int = 100, batch_id: int | None = None) -> I
 
 
 def list_normalized_events(db: Session, limit: int = 100, batch_id: int | None = None) -> Iterable[IngestionHistory]:
-    stmt = select(IngestionHistory).order_by(IngestionHistory.id.desc()).limit(limit)
+    return list_normalized_events_page(db, limit=limit, offset=0, batch_id=batch_id)
+
+
+def list_normalized_events_page(
+    db: Session,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+    batch_id: int | None = None,
+) -> Iterable[IngestionHistory]:
+    stmt = (
+        select(IngestionHistory)
+        .order_by(IngestionHistory.created_at.desc(), IngestionHistory.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     if batch_id is not None:
-        stmt = select(IngestionHistory).where(IngestionHistory.batch_id == batch_id).order_by(IngestionHistory.id.desc()).limit(limit)
+        stmt = (
+            select(IngestionHistory)
+            .where(IngestionHistory.batch_id == batch_id)
+            .order_by(IngestionHistory.created_at.desc(), IngestionHistory.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
     return db.scalars(stmt).all()
 
 

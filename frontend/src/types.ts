@@ -92,6 +92,7 @@ export type NormalizedEvent = {
   event_type: string
   source: string
   normalized_event: Record<string, unknown>
+  created_at: string | null
 }
 
 export type IngestErrorRecord = {

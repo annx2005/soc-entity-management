@@ -138,10 +138,16 @@ export async function ingestFile(
   )
 }
 
-export async function listNormalizedEvents(batchId?: number): Promise<NormalizedEvent[]> {
-  const params = new URLSearchParams({ limit: '20' })
-  if (batchId) params.set('batch_id', String(batchId))
-  return request<NormalizedEvent[]>(`/api/events/normalized?${params.toString()}`)
+export async function listNormalizedEvents(
+  token?: string,
+  filters: { batchId?: number; limit?: number; offset?: number } = {},
+): Promise<NormalizedEvent[]> {
+  const params = new URLSearchParams({
+    limit: String(filters.limit ?? 20),
+    offset: String(filters.offset ?? 0),
+  })
+  if (filters.batchId) params.set('batch_id', String(filters.batchId))
+  return request<NormalizedEvent[]>(`/api/events/normalized?${params.toString()}`, undefined, token)
 }
 
 export async function listIngestErrors(batchId?: number): Promise<IngestErrorRecord[]> {

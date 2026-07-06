@@ -9,7 +9,7 @@ from app.auth.dependencies import TenantContext, get_tenant_context
 from app.database.session import get_db
 from app.ingestion.schemas import ErrorRecordResponse, IngestFileResponse, NormalizedEventResponse
 from app.ingestion.kafka_service import enqueue_jsonl_bytes, enqueue_jsonl_path
-from app.ingestion.service import get_batch, list_errors, list_normalized_events
+from app.ingestion.service import get_batch, list_errors, list_normalized_events_page
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
@@ -64,9 +64,10 @@ def get_errors(
 def get_normalized_events(
     db: Annotated[Session, Depends(get_db)],
     batch_id: Annotated[Optional[int], Query()] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> list[NormalizedEventResponse]:
-    return list(list_normalized_events(db, limit=limit, batch_id=batch_id))
+    return list(list_normalized_events_page(db, limit=limit, offset=offset, batch_id=batch_id))
 
 
 @router.get("/batches/{batch_id}", response_model=IngestFileResponse)
