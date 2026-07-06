@@ -4,6 +4,7 @@ import {
   Braces,
   Building2,
   CircleDot,
+  Download,
   FileText,
   FileUp,
   Filter,
@@ -19,10 +20,10 @@ import {
   ScrollText,
   UserRound,
   UserRoundPlus,
-} from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import "./App.css";
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { FormEvent, ReactNode } from 'react'
+import './App.css'
 import {
   clearStoredToken,
   findPath,
@@ -42,22 +43,25 @@ import {
   login,
   register,
   storeToken,
-} from "./api";
-import { GraphView } from "./GraphView";
-import { ENTITY_TYPES } from "./types";
+} from './api'
+import { GraphView } from './GraphView'
+import type { GraphViewHandle } from './GraphView'
+import { ENTITY_TYPES, RELATIONSHIP_TYPES } from './types'
 import type {
   AuditLog,
   Evidence,
   Entity,
   EntityTypeCount,
   EntityType,
+  GraphFilters,
+  GraphLayout,
   GraphResponse,
   IngestErrorRecord,
   IngestFileResponse,
   NormalizedEvent,
   Relationship,
   TenantContext,
-} from "./types";
+} from './types'
 
 type DetailState = {
   entity: Entity | null;
@@ -110,6 +114,8 @@ function App() {
   const [detail, setDetail] = useState<DetailState>(EMPTY_DETAIL);
   const [auditRefreshKey, setAuditRefreshKey] = useState(0);
   const [graphHops, setGraphHops] = useState(2);
+  const [graphFilters, setGraphFilters] = useState<GraphFilters>({ relationshipTypes: [] });
+  const [graphLayout, setGraphLayout] = useState<GraphLayout>("force-directed");
   const [stats, setStats] = useState<EntityTypeCount[]>([]);
 
   const refreshEntities = useCallback(async () => {
@@ -198,7 +204,7 @@ function App() {
     Promise.all([
       getEntity(token, selectedEntityId),
       listRelationships(token, selectedEntityId),
-      getGraph(token, selectedEntityId, graphHops),
+      getGraph(token, selectedEntityId, graphHops, graphFilters),
     ])
       .then(([entity, relationships, graph]) => {
         if (!cancelled)
@@ -222,7 +228,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [graphHops, selectedEntityId, token]);
+  }, [graphFilters, graphHops, selectedEntityId, token]);
 
   const selectedEntity =
     detail.entity ??
@@ -472,6 +478,11 @@ function App() {
                   visibleEntities={entities}
                   graphHops={graphHops}
                   onGraphHopsChange={setGraphHops}
+                  graphFilters={graphFilters}
+                  onGraphFiltersChange={setGraphFilters}
+                  graphLayout={graphLayout}
+                  onGraphLayoutChange={setGraphLayout}
+                  onPivotEntity={setSelectedEntityId}
                 />
               ) : (
                 <div className="empty-detail">
@@ -877,6 +888,11 @@ function EntityDetail({
   visibleEntities,
   graphHops,
   onGraphHopsChange,
+  graphFilters,
+  onGraphFiltersChange,
+  graphLayout,
+  onGraphLayoutChange,
+  onPivotEntity,
 }: {
   entity: Entity;
   detail: DetailState;
@@ -884,6 +900,11 @@ function EntityDetail({
   visibleEntities: Entity[];
   graphHops: number;
   onGraphHopsChange: (hops: number) => void;
+  graphFilters: GraphFilters;
+  onGraphFiltersChange: (filters: GraphFilters) => void;
+  graphLayout: GraphLayout;
+  onGraphLayoutChange: (layout: GraphLayout) => void;
+  onPivotEntity: (entityId: string) => void;
 }) {
   const enrichment = entity.properties.enrichment;
   const enrichmentRows = isRecord(enrichment)
@@ -892,6 +913,11 @@ function EntityDetail({
   const properties = Object.entries(entity.properties).filter(
     ([key]) => key !== "enrichment",
   );
+  const graphViewRef = useRef<GraphViewHandle | null>(null);
+  const [visibleGraph, setVisibleGraph] = useState<GraphResponse | null>(detail.graph);
+  const [focusedGraphEntityId, setFocusedGraphEntityId] = useState(entity.id);
+  const [graphActionLoading, setGraphActionLoading] = useState(false);
+  const [graphActionError, setGraphActionError] = useState<string | null>(null);
   const [targetId, setTargetId] = useState("");
   const [pathMaxHops, setPathMaxHops] = useState(4);
   const [pathGraph, setPathGraph] = useState<GraphResponse | null>(null);
@@ -922,6 +948,17 @@ function EntityDetail({
     setRelationshipEvidenceLoading({});
     setRelationshipEvidenceError({});
   }, [entity.id]);
+
+  useEffect(() => {
+    setVisibleGraph(detail.graph)
+    setFocusedGraphEntityId(entity.id)
+    setGraphActionError(null)
+  }, [detail.graph, entity.id])
+
+  const handleNodeSelect = useCallback((entityId: string) => {
+    setFocusedGraphEntityId(entityId)
+    setGraphActionError(null)
+  }, [])
 
   async function handleFindPath(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -990,6 +1027,63 @@ function EntityDetail({
     }
   }
 
+  async function handleExpandGraph() {
+    if (!focusedGraphEntityId) return
+    setGraphActionLoading(true)
+    setGraphActionError(null)
+    try {
+      const expandedGraph = await getGraph(token, focusedGraphEntityId, 1, graphFilters)
+      setVisibleGraph((current) => mergeGraphs(current ?? detail.graph, expandedGraph))
+    } catch (error) {
+      setGraphActionError(messageFrom(error))
+    } finally {
+      setGraphActionLoading(false)
+    }
+  }
+
+  function handlePivotGraph() {
+    if (focusedGraphEntityId) onPivotEntity(focusedGraphEntityId)
+  }
+
+  function handleExportPng() {
+    const png = graphViewRef.current?.exportPng()
+    if (!png) {
+      setGraphActionError('No graph image is ready to export.')
+      return
+    }
+    downloadDataUrl(png, `graph-${slugValue(entity.value)}.png`)
+  }
+
+  function handleExportJson() {
+    const exportGraph = visibleGraph ?? detail.graph
+    if (!exportGraph) {
+      setGraphActionError('No graph data is ready to export.')
+      return
+    }
+    downloadJson(
+      {
+        root_entity_id: entity.id,
+        selected_entity_id: focusedGraphEntityId,
+        layout: graphLayout,
+        hops: graphHops,
+        filters: graphFilters,
+        graph: exportGraph,
+      },
+      `graph-${slugValue(entity.value)}.json`,
+    )
+  }
+
+  function toggleRelationshipType(type: string) {
+    const relationshipTypes = graphFilters.relationshipTypes.includes(type)
+      ? graphFilters.relationshipTypes.filter((item) => item !== type)
+      : [...graphFilters.relationshipTypes, type]
+    onGraphFiltersChange({ ...graphFilters, relationshipTypes })
+  }
+
+  const currentGraph = visibleGraph ?? detail.graph
+  const focusedNode = currentGraph?.nodes.find((node) => stringValue(node.properties.id) === focusedGraphEntityId)
+  const focusedNodeLabel = focusedNode ? stringValue(focusedNode.properties.value) || focusedGraphEntityId : entity.value
+
   return (
     <div className="detail-grid">
       <section className="entity-summary">
@@ -1034,8 +1128,26 @@ function EntityDetail({
         <div className="section-head">
           <div>
             <h3>Graph</h3>
-            <span>{detail.graph?.nodes.length ?? 0} nodes</span>
+            <span>
+              {currentGraph?.nodes.length ?? 0} nodes - {focusedNodeLabel}
+            </span>
           </div>
+          <div className="graph-actions">
+            <button type="button" className="icon-button" onClick={() => void handleExpandGraph()} aria-label="Expand selected node" title="Expand selected node">
+              {graphActionLoading ? <Activity size={15} className="spin" /> : <RefreshCw size={15} />}
+            </button>
+            <button type="button" className="icon-button" onClick={handlePivotGraph} aria-label="Pivot to selected node" title="Pivot to selected node">
+              <Search size={15} />
+            </button>
+            <button type="button" className="icon-button" onClick={handleExportPng} aria-label="Export graph as PNG" title="Export PNG">
+              <Download size={15} />
+            </button>
+            <button type="button" className="icon-button" onClick={handleExportJson} aria-label="Export graph as JSON" title="Export JSON">
+              <Braces size={15} />
+            </button>
+          </div>
+        </div>
+        <div className="graph-controls">
           <label className="hop-select">
             <Filter size={15} />
             <select
@@ -1051,8 +1163,50 @@ function EntityDetail({
               ))}
             </select>
           </label>
+          <label className="layout-select">
+            <Filter size={15} />
+            <select value={graphLayout} onChange={(event) => onGraphLayoutChange(event.target.value as GraphLayout)}>
+              <option value="force-directed">Force-directed</option>
+              <option value="hierarchical">Hierarchical</option>
+            </select>
+          </label>
+          <label className="time-filter">
+            <span>From</span>
+            <input
+              type="datetime-local"
+              value={graphFilters.fromTime ?? ''}
+              onChange={(event) => onGraphFiltersChange({ ...graphFilters, fromTime: event.target.value || undefined })}
+            />
+          </label>
+          <label className="time-filter">
+            <span>To</span>
+            <input
+              type="datetime-local"
+              value={graphFilters.toTime ?? ''}
+              onChange={(event) => onGraphFiltersChange({ ...graphFilters, toTime: event.target.value || undefined })}
+            />
+          </label>
         </div>
-        <GraphView graph={detail.graph} selectedEntityId={entity.id} />
+        <div className="relationship-filter" aria-label="Relationship type filters">
+          {RELATIONSHIP_TYPES.map((type) => (
+            <button
+              type="button"
+              className={graphFilters.relationshipTypes.includes(type) ? 'active' : ''}
+              key={type}
+              onClick={() => toggleRelationshipType(type)}
+            >
+              {type.replaceAll('_', ' ')}
+            </button>
+          ))}
+        </div>
+        {graphActionError ? <div className="notice error">{graphActionError}</div> : null}
+        <GraphView
+          ref={graphViewRef}
+          graph={currentGraph}
+          selectedEntityId={focusedGraphEntityId}
+          layout={graphLayout}
+          onNodeSelect={handleNodeSelect}
+        />
       </section>
 
       <section className="path-section panel">
@@ -1640,6 +1794,34 @@ function hasDisplayValue(value: unknown): boolean {
   return true;
 }
 
+function mergeGraphs(base: GraphResponse | null, addition: GraphResponse): GraphResponse {
+  const nodes = new Map<string, GraphResponse['nodes'][number]>()
+  const edges = new Map<string, GraphResponse['edges'][number]>()
+  for (const node of base?.nodes ?? []) nodes.set(node.id, node)
+  for (const edge of base?.edges ?? []) edges.set(edge.id, edge)
+  for (const node of addition.nodes) nodes.set(node.id, node)
+  for (const edge of addition.edges) edges.set(edge.id, edge)
+  return { nodes: [...nodes.values()], edges: [...edges.values()] }
+}
+
+function downloadDataUrl(url: string, filename: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+}
+
+function downloadJson(value: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  downloadDataUrl(url, filename)
+  URL.revokeObjectURL(url)
+}
+
+function slugValue(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'entity'
+}
+
 function formatAction(action: string): string {
   return action.replaceAll("_", " ");
 }
@@ -1764,6 +1946,10 @@ function joinArray(value: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
 }
 
 function messageFrom(error: unknown): string {

@@ -7,7 +7,15 @@ from app.entities.schemas import Entity
 from app.enrichment.service import EnrichmentService
 from app.graph.inference import infer_relationships
 from app.graph.repository import GraphRepository
-from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphIngestResult, GraphResponse, RelationshipResponse
+from app.graph.schemas import (
+    EntityResponse,
+    EntityTypeCountResponse,
+    EvidenceResponse,
+    GraphIngestResult,
+    GraphQueryFilters,
+    GraphResponse,
+    RelationshipResponse,
+)
 from app.observability.metrics import record_entity_upsert, record_graph_event, record_relationship_upsert
 from app.ocsf.schemas import OCSFEvent
 
@@ -73,7 +81,14 @@ class GraphRepositoryProtocol(Protocol):
     ) -> list[EvidenceResponse]:
         ...
 
-    async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
+    async def get_graph(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        hops: int = 1,
+        limit: int = 200,
+        filters: GraphQueryFilters | None = None,
+    ) -> GraphResponse:
         ...
 
     async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50) -> GraphResponse:
@@ -171,6 +186,16 @@ class GraphService:
     async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[EvidenceResponse]:
         return await self._repository.list_evidence(tenant_id, entity_id, limit=limit)
 
+    async def get_graph(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        hops: int = 1,
+        limit: int = 200,
+        filters: GraphQueryFilters | None = None,
+    ) -> GraphResponse:
+        return await self._repository.get_graph(tenant_id, entity_id, hops=hops, limit=limit, filters=filters)
+
     async def list_relationship_evidence(
         self,
         tenant_id: str,
@@ -179,9 +204,6 @@ class GraphService:
         limit: int = 100,
     ) -> list[EvidenceResponse]:
         return await self._repository.list_relationship_evidence(tenant_id, entity_id, relationship_id, limit=limit)
-
-    async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
-        return await self._repository.get_graph(tenant_id, entity_id, hops=hops, limit=limit)
 
     async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50) -> GraphResponse:
         return await self._repository.find_path(tenant_id, source_id, target_id, max_hops=max_hops, limit=limit)

@@ -1,12 +1,18 @@
 import cytoscape from 'cytoscape'
-import { useEffect, useRef } from 'react'
-import type { Core, ElementDefinition } from 'cytoscape'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import type { Core, ElementDefinition, NodeSingular } from 'cytoscape'
 import { Crosshair, MoveDiagonal2 } from 'lucide-react'
-import type { GraphResponse } from './types'
+import type { GraphLayout, GraphResponse } from './types'
 
 type GraphViewProps = {
   graph: GraphResponse | null
   selectedEntityId: string | null
+  layout?: GraphLayout
+  onNodeSelect?: (entityId: string) => void
+}
+
+export type GraphViewHandle = {
+  exportPng: () => string | null
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -22,9 +28,20 @@ const TYPE_COLORS: Record<string, string> = {
   cloud_resource: '#6a6f25',
 }
 
-export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
+export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function GraphView(
+  { graph, selectedEntityId, layout = 'force-directed', onNodeSelect },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      exportPng: () => cyRef.current?.png({ bg: '#f7f9f8', full: false, scale: 2 }) ?? null,
+    }),
+    [],
+  )
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -116,11 +133,12 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
           },
         },
       ],
-      layout: {
-        name: 'preset',
-        positions: buildPositions(graph, selectedEntityId),
-        fit: false,
-      },
+      layout: layoutOptions(layout),
+    })
+
+    cy.on('tap', 'node', (event) => {
+      const entityId = stringValue((event.target as NodeSingular).data('entityId'))
+      if (entityId) onNodeSelect?.(entityId)
     })
 
     const selectedNodes = cy.nodes().filter((node) => node.data('entityId') === selectedEntityId)
@@ -148,7 +166,7 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
     }
-  }, [graph, selectedEntityId])
+  }, [graph, layout, onNodeSelect, selectedEntityId])
 
   if (!graph || graph.nodes.length === 0) {
     return <div className="graph-empty">No graph data</div>
@@ -169,7 +187,7 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
       <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
     </div>
   )
-}
+})
 
 function toElements(graph: GraphResponse | null): ElementDefinition[] {
   if (!graph) return []
@@ -201,90 +219,28 @@ function toElements(graph: GraphResponse | null): ElementDefinition[] {
   return [...nodes, ...edges]
 }
 
+function layoutOptions(layout: GraphLayout) {
+  if (layout === 'hierarchical') {
+    return {
+      name: 'breadthfirst',
+      animate: false,
+      directed: true,
+      padding: 32,
+      spacingFactor: 1.25,
+    }
+  }
+
+  return {
+    name: 'cose',
+    animate: false,
+    nodeRepulsion: 9000,
+    idealEdgeLength: 110,
+    componentSpacing: 80,
+  }
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
-}
-
-function buildPositions(graph: GraphResponse | null, selectedEntityId: string | null): Record<string, { x: number; y: number }> {
-  if (!graph || graph.nodes.length === 0) return {}
-
-  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]))
-  const selectedNode =
-    graph.nodes.find((node) => stringValue(node.properties.id) === selectedEntityId) ??
-    graph.nodes.find((node) => node.labels.includes('Entity')) ??
-    graph.nodes[0]
-
-  const adjacency = new Map<string, Set<string>>()
-  for (const node of graph.nodes) adjacency.set(node.id, new Set())
-  for (const edge of graph.edges) {
-    adjacency.get(edge.start_id)?.add(edge.end_id)
-    adjacency.get(edge.end_id)?.add(edge.start_id)
-  }
-
-  const levelByNodeId = new Map<string, number>([[selectedNode.id, 0]])
-  const queue = [selectedNode.id]
-
-  while (queue.length > 0) {
-    const current = queue.shift()
-    if (!current) continue
-    const nextLevel = (levelByNodeId.get(current) ?? 0) + 1
-    for (const neighborId of adjacency.get(current) ?? []) {
-      if (levelByNodeId.has(neighborId)) continue
-      levelByNodeId.set(neighborId, nextLevel)
-      queue.push(neighborId)
-    }
-  }
-
-  const disconnectedLevel = Math.max(...levelByNodeId.values(), 0) + 1
-  const rings = new Map<number, string[]>()
-  for (const node of graph.nodes) {
-    const level = levelByNodeId.get(node.id) ?? disconnectedLevel
-    const ring = rings.get(level)
-    if (ring) {
-      ring.push(node.id)
-    } else {
-      rings.set(level, [node.id])
-    }
-  }
-
-  for (const [level, ids] of rings) {
-    if (level === 0) continue
-    ids.sort((leftId, rightId) => compareNodes(nodeById.get(leftId), nodeById.get(rightId)))
-  }
-
-  const positions: Record<string, { x: number; y: number }> = {
-    [selectedNode.id]: { x: 0, y: 0 },
-  }
-
-  for (const [level, ids] of [...rings.entries()].sort((left, right) => left[0] - right[0])) {
-    if (level === 0) continue
-    const count = ids.length
-    const baseRadius = 180 + (level - 1) * 170
-    const radius = Math.max(baseRadius, (count * 145) / (2 * Math.PI))
-    const angleOffset = level % 2 === 0 ? Math.PI / count : Math.PI / 2
-
-    ids.forEach((id, index) => {
-      const angle = angleOffset + (index * 2 * Math.PI) / Math.max(count, 1)
-      positions[id] = {
-        x: Math.cos(angle) * radius,
-        y: Math.sin(angle) * radius,
-      }
-    })
-  }
-
-  return positions
-}
-
-function compareNodes(left: GraphResponse['nodes'][number] | undefined, right: GraphResponse['nodes'][number] | undefined): number {
-  const leftType = stringValue(left?.properties.entity_type)
-  const rightType = stringValue(right?.properties.entity_type)
-  if (leftType !== rightType) return leftType.localeCompare(rightType)
-
-  const leftValue = stringValue(left?.properties.value)
-  const rightValue = stringValue(right?.properties.value)
-  if (leftValue !== rightValue) return leftValue.localeCompare(rightValue)
-
-  return stringValue(left?.properties.id).localeCompare(stringValue(right?.properties.id))
 }
 
 function focusSelectedNode(cy: Core | null, selectedEntityId: string | null): void {

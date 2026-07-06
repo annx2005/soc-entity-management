@@ -10,6 +10,14 @@ export type EntityType =
   | 'cve'
   | 'cloud_resource'
 
+export type GraphLayout = 'force-directed' | 'hierarchical'
+
+export type GraphFilters = {
+  relationshipTypes: string[]
+  fromTime?: string
+  toTime?: string
+}
+
 export type TenantContext = {
   account_id: string
   tenant_id: string | null
@@ -136,4 +144,18 @@ export const ENTITY_TYPES: EntityType[] = [
   'email',
   'cve',
   'cloud_resource',
+]
+
+export const RELATIONSHIP_TYPES = [
+  'LOGGED_IN_TO',
+  'FAILED_LOGON_TO',
+  'AUTHENTICATED_TO',
+  'ATTEMPTED_LOGON_TO',
+  'CONNECTED_TO',
+  'USED_IP',
+  'RESOLVED_DOMAIN',
+  'RESOLVED_TO',
+  'EXECUTED_ON',
+  'HAS_HASH',
+  'RAN_AS',
 ]
