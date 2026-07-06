@@ -3,7 +3,6 @@ import type {
   Evidence,
   Entity,
   EntityTypeCount,
-  EntityType,
   GraphResponse,
   IngestErrorRecord,
   IngestFileResponse,
@@ -30,7 +29,7 @@ type RegisterPayload = {
 }
 
 type EntityFilters = {
-  entityType?: EntityType | ''
+  entityType?: string
   value?: string
   limit?: number
   offset?: number

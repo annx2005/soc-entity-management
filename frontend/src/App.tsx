@@ -21,7 +21,7 @@ import {
   UserRoundPlus,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import "./App.css";
 import {
   clearStoredToken,
@@ -82,6 +82,10 @@ const TYPE_LABELS: Record<string, string> = {
   domain: "Domain",
   file_hash: "File hash",
   process: "Process",
+  url: "URL",
+  email: "Email",
+  cve: "CVE",
+  cloud_resource: "Cloud resource",
 };
 
 const ENTITY_PAGE_SIZE = 25;
@@ -95,7 +99,7 @@ function App() {
   );
   const [entities, setEntities] = useState<Entity[]>([]);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
-  const [entityType, setEntityType] = useState<EntityType | "">("");
+  const [entityType, setEntityType] = useState("");
   const [valueFilter, setValueFilter] = useState("");
   const [entityPage, setEntityPage] = useState(0);
   const [hasNextEntityPage, setHasNextEntityPage] = useState(false);
@@ -382,7 +386,7 @@ function App() {
                   value={entityType}
                   onChange={(event) => {
                     setEntityPage(0);
-                    setEntityType(event.target.value as EntityType | "");
+                    setEntityType(event.target.value);
                   }}
                 >
                   <option value="">All types</option>
@@ -830,38 +834,38 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
 
       {error ? <div className="notice error">{error}</div> : null}
 
-      <div className="import-preview">
-        <div>
-          <div className="preview-title">
-            <FileText size={13} />
-            <span>Ready events</span>
-          </div>
-          {normalized.slice(0, 3).map((event) => (
-            <div className="preview-row" key={event.id}>
-              <strong>{event.event_type}</strong>
-              <small>{event.source}</small>
+      {(normalized.length > 0 || errors.length > 0) ? (
+        <div className="import-preview">
+          {normalized.length > 0 ? (
+            <div>
+              <div className="preview-title">
+                <FileText size={13} />
+                <span>Ready events</span>
+              </div>
+              {normalized.slice(0, 3).map((event) => (
+                <div className="preview-row" key={event.id}>
+                  <strong>{event.event_type}</strong>
+                  <small>{event.source}</small>
+                </div>
+              ))}
             </div>
-          ))}
-          {result && normalized.length === 0 && !logsLoading ? (
-            <div className="preview-empty">No events yet</div>
+          ) : null}
+          {errors.length > 0 ? (
+            <div>
+              <div className="preview-title">
+                <AlertTriangle size={13} />
+                <span>Issues</span>
+              </div>
+              {errors.slice(0, 3).map((item) => (
+                <div className="preview-row warning" key={item.id}>
+                  <strong>Line {item.line_number}</strong>
+                  <small>{item.message}</small>
+                </div>
+              ))}
+            </div>
           ) : null}
         </div>
-        <div>
-          <div className="preview-title">
-            <AlertTriangle size={13} />
-            <span>Issues</span>
-          </div>
-          {errors.slice(0, 3).map((item) => (
-            <div className="preview-row warning" key={item.id}>
-              <strong>Line {item.line_number}</strong>
-              <small>{item.message}</small>
-            </div>
-          ))}
-          {result && errors.length === 0 && !logsLoading ? (
-            <div className="preview-empty">No issues</div>
-          ) : null}
-        </div>
-      </div>
+      ) : null}
     </section>
   );
 }
@@ -905,6 +909,8 @@ function EntityDetail({
   const [relationshipEvidenceError, setRelationshipEvidenceError] = useState<
     Record<string, string | null>
   >({});
+  const firstSeen = formatDateParts(entity.first_seen);
+  const lastSeen = formatDateParts(entity.last_seen);
 
   useEffect(() => {
     setTargetId("");
@@ -994,10 +1000,31 @@ function EntityDetail({
           <h2>{entity.value}</h2>
           <p>{entity.id}</p>
         </div>
-        <div className="summary-times">
-          <Metric label="First seen" value={formatDate(entity.first_seen)} />
-          <Metric label="Last seen" value={formatDate(entity.last_seen)} />
-          <Metric label="Source" value={entity.source ?? "-"} />
+        <div className="entity-metadata-row">
+          <div className="meta-item">
+            <span className="meta-label">First seen</span>
+            <div className="meta-value">
+              <strong>{firstSeen.primary}</strong>
+              {firstSeen.secondary && <span className="meta-sub">{firstSeen.secondary}</span>}
+            </div>
+          </div>
+          <div className="meta-divider" />
+          <div className="meta-item">
+            <span className="meta-label">Last seen</span>
+            <div className="meta-value">
+              <strong>{lastSeen.primary}</strong>
+              {lastSeen.secondary && <span className="meta-sub">{lastSeen.secondary}</span>}
+            </div>
+          </div>
+          <div className="meta-divider" />
+          <div className="meta-item">
+            <span className="meta-label">Source</span>
+            <div className="meta-value">
+              <strong className="mono" title={entity.source ?? "-"}>
+                {entity.source ?? "-"}
+              </strong>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -1400,29 +1427,36 @@ function EventLogPage({
         </button>
       </div>
       <div className="event-log-list">
-        {events.map((event) => (
-          <article className="event-log-card" key={event.id}>
-            <div className="event-log-head">
-              <div>
-                <strong>{formatNormalizedEventTitle(event)}</strong>
-                <span>{formatNormalizedEventSubtitle(event)}</span>
-              </div>
-              <time>{formatDate(event.created_at)}</time>
-            </div>
-            <div className="event-log-meta">
-              {buildNormalizedEventFacts(event).map(([label, value]) => (
-                <div className="event-log-fact" key={`${event.id}:${label}`}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
+        {events.map((event) => {
+          const facts = buildNormalizedEventFacts(event);
+
+          return (
+            <article className="event-log-card" key={event.id}>
+              <div className="event-log-head">
+                <div>
+                  <strong>{formatNormalizedEventTitle(event)}</strong>
+                  <span>{formatNormalizedEventSubtitle(event)}</span>
                 </div>
-              ))}
-            </div>
-            <details className="event-log-raw">
-              <summary>Raw normalized event</summary>
-              <pre>{JSON.stringify(event.normalized_event, null, 2)}</pre>
-            </details>
-          </article>
-        ))}
+                <time>{formatDate(event.created_at)}</time>
+              </div>
+              <div
+                className="event-log-meta"
+                style={{ gridTemplateColumns: `repeat(${facts.length}, minmax(148px, 1fr))` }}
+              >
+                {facts.map(([label, value]) => (
+                  <div className="event-log-fact" key={`${event.id}:${label}`}>
+                    <span>{label}</span>
+                    <strong>{value}</strong>
+                  </div>
+                ))}
+              </div>
+              <details className="event-log-raw">
+                <summary>Raw normalized event</summary>
+                <pre>{JSON.stringify(event.normalized_event, null, 2)}</pre>
+              </details>
+            </article>
+          );
+        })}
         {!loading && events.length === 0 ? (
           <div className="empty-state compact">No processed events</div>
         ) : null}
@@ -1431,11 +1465,27 @@ function EventLogPage({
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  secondary,
+  icon,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  secondary?: string;
+  icon?: ReactNode;
+  mono?: boolean;
+}) {
   return (
     <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
+      {icon ? <div className="metric-icon">{icon}</div> : null}
+      <div className="metric-copy">
+        <span>{label}</span>
+        <strong className={mono ? "metric-value-mono" : undefined}>{value}</strong>
+        {secondary ? <small>{secondary}</small> : null}
+      </div>
     </div>
   );
 }
@@ -1457,22 +1507,38 @@ function buildStats(entityTypeCounts: EntityTypeCount[]) {
   const countsByType = new Map(
     entityTypeCounts.map((item) => [item.entity_type, item.count]),
   );
-  return ENTITY_TYPES.map((type) => ({
+  const extraTypes = entityTypeCounts
+    .map((item) => item.entity_type)
+    .filter((type) => !ENTITY_TYPES.includes(type as EntityType))
+    .sort((left, right) => String(left).localeCompare(String(right)));
+
+  return [...ENTITY_TYPES, ...extraTypes].map((type) => ({
     type,
     count: countsByType.get(type) ?? 0,
   }));
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return "-";
+  const { primary, secondary } = formatDateParts(value);
+  return secondary ? `${primary}, ${secondary}` : primary;
+}
+
+function formatDateParts(
+  value: string | null,
+): { primary: string; secondary?: string } {
+  if (!value) return { primary: "-" };
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  if (Number.isNaN(date.getTime())) return { primary: value };
+  return {
+    primary: new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "2-digit",
+    }).format(date),
+    secondary: new Intl.DateTimeFormat(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date),
+  };
 }
 
 function formatValue(value: unknown): string {

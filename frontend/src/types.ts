@@ -1,4 +1,14 @@
-export type EntityType = 'user' | 'host' | 'ip' | 'domain' | 'file_hash' | 'process'
+export type EntityType =
+  | 'user'
+  | 'host'
+  | 'ip'
+  | 'domain'
+  | 'file_hash'
+  | 'process'
+  | 'url'
+  | 'email'
+  | 'cve'
+  | 'cloud_resource'
 
 export type TenantContext = {
   account_id: string
@@ -115,4 +125,15 @@ export type AuditLog = {
   created_at: string
 }
 
-export const ENTITY_TYPES: EntityType[] = ['user', 'host', 'ip', 'domain', 'file_hash', 'process']
+export const ENTITY_TYPES: EntityType[] = [
+  'user',
+  'host',
+  'ip',
+  'domain',
+  'file_hash',
+  'process',
+  'url',
+  'email',
+  'cve',
+  'cloud_resource',
+]

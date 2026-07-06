@@ -16,6 +16,10 @@ const TYPE_COLORS: Record<string, string> = {
   domain: '#7a4f9a',
   file_hash: '#9a3f43',
   process: '#4e647a',
+  url: '#2d6a9f',
+  email: '#b35b2e',
+  cve: '#8f4b66',
+  cloud_resource: '#6a6f25',
 }
 
 export function GraphView({ graph, selectedEntityId }: GraphViewProps) {

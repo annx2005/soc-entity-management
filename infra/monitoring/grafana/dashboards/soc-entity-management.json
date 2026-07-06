@@ -46,7 +46,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (tenant_id, entity_type) (soc_entities_total)",
+          "expr": "sum by (tenant_id, entity_type) (soc_entities_total{tenant_id=~\"$tenant_id\", entity_type=~\"$entity_type\"})",
           "legendFormat": "{{tenant_id}} / {{entity_type}}",
           "refId": "A"
         }
@@ -84,7 +84,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (tenant_id, entity_type, status) (rate(soc_graph_entities_upserted_total[5m]))",
+          "expr": "sum by (tenant_id, entity_type, status) (rate(soc_graph_entities_upserted_total{tenant_id=~\"$tenant_id\", entity_type=~\"$entity_type\"}[5m]))",
           "legendFormat": "{{tenant_id}} / {{entity_type}} / {{status}}",
           "refId": "A"
         }
@@ -122,12 +122,12 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le, entity_type) (rate(soc_enrichment_lookup_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, entity_type) (rate(soc_enrichment_lookup_duration_seconds_bucket{entity_type=~\"$entity_type\"}[5m])))",
           "legendFormat": "p50 {{entity_type}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le, entity_type) (rate(soc_enrichment_lookup_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, entity_type) (rate(soc_enrichment_lookup_duration_seconds_bucket{entity_type=~\"$entity_type\"}[5m])))",
           "legendFormat": "p95 {{entity_type}}",
           "refId": "B"
         }
@@ -165,7 +165,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (entity_type, cache_status, outcome) (rate(soc_enrichment_requests_total[5m]))",
+          "expr": "sum by (entity_type, cache_status, outcome) (rate(soc_enrichment_requests_total{entity_type=~\"$entity_type\"}[5m]))",
           "legendFormat": "{{entity_type}} / {{cache_status}} / {{outcome}}",
           "refId": "A"
         }
@@ -218,23 +218,33 @@
       },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "mappings": [
             {
               "options": {
                 "0": {
                   "color": "red",
                   "index": 0,
-                  "text": "down"
+                  "text": "Down"
                 },
                 "1": {
                   "color": "green",
                   "index": 1,
-                  "text": "up"
+                  "text": "Up"
                 }
               },
               "type": "value"
             }
           ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
           "unit": "short"
         },
         "overrides": []
@@ -249,29 +259,220 @@
       "options": {
         "colorMode": "background",
         "graphMode": "none",
-        "justifyMode": "auto",
+        "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["lastNotNull"],
           "fields": "",
           "values": false
         },
-        "showPercentChange": false,
         "textMode": "auto",
         "wideLayout": true
       },
       "pluginVersion": "13.1.0",
       "targets": [
         {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
           "expr": "up{job=~\"soc-.*|kafka-exporter\"}",
+          "instant": true,
           "legendFormat": "{{job}}",
           "refId": "A"
         }
       ],
       "title": "Monitoring Targets",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tenant_id, status) (rate(soc_graph_events_processed_total{tenant_id=~\"$tenant_id\"}[5m]))",
+          "legendFormat": "{{tenant_id}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Event Processing Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tenant_id, relationship_type, status) (rate(soc_graph_relationships_upserted_total{tenant_id=~\"$tenant_id\", relationship_type=~\"$relationship_type\"}[5m]))",
+          "legendFormat": "{{tenant_id}} / {{relationship_type}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Relationship Upsert Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (job) (rate(process_cpu_seconds_total{job=~\"soc-.*\"}[5m])) * 100",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Worker CPU Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (job) (process_resident_memory_bytes{job=~\"soc-.*\"})",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Worker Memory Usage",
+      "type": "timeseries"
     }
   ],
   "preload": false,
@@ -282,7 +483,74 @@
     "entity-management"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(soc_entities_total, tenant_id)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "tenant_id",
+        "options": [],
+        "query": {
+          "query": "label_values(soc_entities_total, tenant_id)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(soc_entities_total, entity_type)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "entity_type",
+        "options": [],
+        "query": {
+          "query": "label_values(soc_entities_total, entity_type)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(soc_graph_relationships_upserted_total, relationship_type)",
+        "hide": 0,
+        "includeAll": true,
+        "multi": true,
+        "name": "relationship_type",
+        "options": [],
+        "query": {
+          "query": "label_values(soc_graph_relationships_upserted_total, relationship_type)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-1h",
@@ -292,5 +560,5 @@
   "timezone": "browser",
   "title": "SOC Entity Management",
   "uid": "soc-entity-management",
-  "version": 1
+  "version": 2
 }
