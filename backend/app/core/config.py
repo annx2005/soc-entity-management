@@ -1,36 +1,39 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
 class Settings(BaseSettings):
     app_name: str = "SOC Entity Management"
     environment: str = "local"
-    tenant_id_default: str = "default"
-    jwt_secret_key: str = "local-dev-change-me-32-bytes-min"
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    tenant_id_default: str
+    jwt_secret_key: str
+    jwt_algorithm: str
+    access_token_expire_minutes: int
 
-    database_url: str = "sqlite:///./soc_entity_management.db"
-    redis_url: str = "redis://localhost:6379/0"
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = "password"
-    kafka_bootstrap_servers: str = "localhost:9092"
-    kafka_raw_events_topic: str = "soc.raw-events.v1"
-    kafka_normalized_events_topic: str = "soc.normalized-events.v1"
-    kafka_ocsf_events_topic: str = "soc.ocsf-events.v1"
-    kafka_dead_letter_topic: str = "soc.ingest-dlq.v1"
-    kafka_ingestion_group_id: str = "soc-ingestion-workers"
-    kafka_graph_group_id: str = "soc-graph-workers"
-    enrichment_ip_source_path: str = "/data/enrichment/ip_enrichment.json"
-    enrichment_file_hash_source_path: str = "/data/enrichment/file_hash_enrichment.json"
-    enrichment_cache_ttl_seconds: int = 86400
-    enrichment_enabled: bool = True
+    database_url: str
+    redis_url: str
+    neo4j_uri: str
+    neo4j_user: str
+    neo4j_password: str
+    kafka_bootstrap_servers: str
+    kafka_raw_events_topic: str
+    kafka_normalized_events_topic: str
+    kafka_ocsf_events_topic: str
+    kafka_dead_letter_topic: str
+    kafka_ingestion_group_id: str
+    kafka_graph_group_id: str
+    enrichment_ip_source_path: str
+    enrichment_file_hash_source_path: str
+    enrichment_cache_ttl_seconds: int
+    enrichment_enabled: bool
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
 
 @lru_cache
