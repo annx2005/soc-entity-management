@@ -6,7 +6,7 @@ metadata:
     {{- include "soc.labels" . | nindent 4 }}
     app.kubernetes.io/component: neo4j
 spec:
-  serviceName: {{ include "soc.neo4jName" . }}
+  serviceName: {{ include "soc.neo4jHeadlessName" . }}
   replicas: 1
   selector:
     matchLabels:

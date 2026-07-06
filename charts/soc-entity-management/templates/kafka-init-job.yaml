@@ -24,7 +24,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: "{{ include "soc.kafkaName" . }}:9092"
+              value: "{{ include "soc.kafkaHeadlessName" . }}:9092"
             - name: KAFKA_RAW_EVENTS_TOPIC
               value: {{ .Values.kafka.topics.rawEvents | quote }}
             - name: KAFKA_NORMALIZED_EVENTS_TOPIC

@@ -51,6 +51,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "soc.fullname" . }}-postgresql
 {{- end -}}
 
+{{- define "soc.postgresqlHeadlessName" -}}
+{{- include "soc.postgresqlName" . }}-headless
+{{- end -}}
+
 {{- define "soc.redisName" -}}
 {{- include "soc.fullname" . }}-redis
 {{- end -}}
@@ -59,8 +63,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "soc.fullname" . }}-kafka
 {{- end -}}
 
+{{- define "soc.kafkaHeadlessName" -}}
+{{- include "soc.kafkaName" . }}-headless
+{{- end -}}
+
 {{- define "soc.neo4jName" -}}
 {{- include "soc.fullname" . }}-neo4j
+{{- end -}}
+
+{{- define "soc.neo4jHeadlessName" -}}
+{{- include "soc.neo4jName" . }}-headless
 {{- end -}}
 
 {{- define "soc.backendImage" -}}

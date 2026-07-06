@@ -6,7 +6,7 @@ metadata:
     {{- include "soc.labels" . | nindent 4 }}
     app.kubernetes.io/component: postgresql
 spec:
-  serviceName: {{ include "soc.postgresqlName" . }}
+  serviceName: {{ include "soc.postgresqlHeadlessName" . }}
   replicas: 1
   selector:
     matchLabels:

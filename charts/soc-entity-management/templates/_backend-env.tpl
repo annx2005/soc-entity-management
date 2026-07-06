@@ -27,7 +27,7 @@
 - name: REDIS_URL
   value: "redis://{{ include "soc.redisName" . }}:6379/0"
 - name: NEO4J_URI
-  value: "bolt://{{ include "soc.neo4jName" . }}:7687"
+  value: "bolt://{{ include "soc.neo4jHeadlessName" . }}:7687"
 - name: NEO4J_USER
   value: {{ .Values.neo4j.auth.username | quote }}
 - name: NEO4J_PASSWORD
@@ -36,7 +36,7 @@
       name: {{ include "soc.secretName" . }}
       key: NEO4J_PASSWORD
 - name: KAFKA_BOOTSTRAP_SERVERS
-  value: "{{ include "soc.kafkaName" . }}:9092"
+  value: "{{ include "soc.kafkaHeadlessName" . }}:9092"
 - name: KAFKA_RAW_EVENTS_TOPIC
   value: {{ .Values.kafka.topics.rawEvents | quote }}
 - name: KAFKA_NORMALIZED_EVENTS_TOPIC
