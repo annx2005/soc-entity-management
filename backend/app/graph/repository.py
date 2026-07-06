@@ -10,7 +10,16 @@ from app.core.config import get_settings
 from app.entities.schemas import Entity, EntityType
 from app.graph.constants import label_for_entity_type, validate_relationship_type
 from app.graph.ids import graph_event_id, observation_id, relationship_fact_id
-from app.graph.schemas import EntityResponse, EvidenceResponse, GraphEdge, GraphNode, GraphResponse, RelationshipCandidate, RelationshipResponse
+from app.graph.schemas import (
+    EntityResponse,
+    EvidenceResponse,
+    GraphEdge,
+    GraphNode,
+    GraphQueryFilters,
+    GraphResponse,
+    RelationshipCandidate,
+    RelationshipResponse,
+)
 from app.ocsf.schemas import OCSFEvent
 
 
@@ -284,18 +293,37 @@ class GraphRepository:
             result = await session.run(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
             return [_evidence_response(record["event"], record["obs"]) async for record in result]
 
-    async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
+    async def get_graph(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        hops: int = 1,
+        limit: int = 200,
+        filters: GraphQueryFilters | None = None,
+    ) -> GraphResponse:
         if hops < 1 or hops > 4:
             raise ValueError("hops must be between 1 and 4")
+        filters = filters or GraphQueryFilters()
         query = f"""
         MATCH path = (entity:Entity {{id: $entity_id, tenant_id: $tenant_id}})-[*1..{hops}]-(neighbor:Entity)
         WHERE neighbor.tenant_id = $tenant_id
           AND all(node IN nodes(path) WHERE node:Entity AND node.tenant_id = $tenant_id)
           AND all(rel IN relationships(path) WHERE rel.tenant_id = $tenant_id)
+          AND ($relationship_types = [] OR all(rel IN relationships(path) WHERE rel.relationship_type IN $relationship_types))
+          AND ($from_time IS NULL OR all(rel IN relationships(path) WHERE rel.last_seen >= datetime($from_time)))
+          AND ($to_time IS NULL OR all(rel IN relationships(path) WHERE rel.first_seen <= datetime($to_time)))
         RETURN path
         LIMIT $limit
         """
-        return await self._paths_to_graph(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
+        return await self._paths_to_graph(
+            query,
+            tenant_id=tenant_id,
+            entity_id=entity_id,
+            relationship_types=filters.relationship_types,
+            from_time=filters.from_time,
+            to_time=filters.to_time,
+            limit=limit,
+        )
 
     async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50) -> GraphResponse:
         if max_hops < 1 or max_hops > 4:

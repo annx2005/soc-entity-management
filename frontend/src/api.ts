@@ -2,6 +2,7 @@ import type {
   AuditLog,
   Entity,
   EntityType,
+  GraphFilters,
   GraphResponse,
   IngestErrorRecord,
   IngestFileResponse,
@@ -87,8 +88,18 @@ export async function listRelationships(token: string, entityId: string): Promis
   return request<Relationship[]>(`/api/entities/${encodeURIComponent(entityId)}/relationships?limit=100`, undefined, token)
 }
 
-export async function getGraph(token: string, entityId: string, hops = 2): Promise<GraphResponse> {
-  return request<GraphResponse>(`/api/graph/${encodeURIComponent(entityId)}?hops=${hops}&limit=200`, undefined, token)
+export async function getGraph(
+  token: string,
+  entityId: string,
+  hops = 2,
+  filters: GraphFilters = { relationshipTypes: [] },
+  limit = 200,
+): Promise<GraphResponse> {
+  const params = new URLSearchParams({ hops: String(hops), limit: String(limit) })
+  filters.relationshipTypes.forEach((type) => params.append('relationship_type', type))
+  if (filters.fromTime?.trim()) params.set('from_time', graphTimeValue(filters.fromTime))
+  if (filters.toTime?.trim()) params.set('to_time', graphTimeValue(filters.toTime))
+  return request<GraphResponse>(`/api/graph/${encodeURIComponent(entityId)}?${params.toString()}`, undefined, token)
 }
 
 export async function findPath(token: string, sourceId: string, targetId: string, maxHops = 4): Promise<GraphResponse> {
@@ -171,4 +182,11 @@ async function readError(response: Response): Promise<string> {
   } catch {
     return response.statusText
   }
+}
+
+function graphTimeValue(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return trimmed
+  if (/[zZ]$|[+-]\d\d:\d\d$/.test(trimmed)) return trimmed
+  return trimmed.length === 16 ? `${trimmed}:00Z` : `${trimmed}Z`
 }

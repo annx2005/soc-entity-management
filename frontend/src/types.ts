@@ -1,5 +1,13 @@
 export type EntityType = 'user' | 'host' | 'ip' | 'domain' | 'file_hash' | 'process'
 
+export type GraphLayout = 'force-directed' | 'hierarchical'
+
+export type GraphFilters = {
+  relationshipTypes: string[]
+  fromTime?: string
+  toTime?: string
+}
+
 export type TenantContext = {
   account_id: string
   tenant_id: string | null
@@ -97,3 +105,17 @@ export type AuditLog = {
 }
 
 export const ENTITY_TYPES: EntityType[] = ['user', 'host', 'ip', 'domain', 'file_hash', 'process']
+
+export const RELATIONSHIP_TYPES = [
+  'LOGGED_IN_TO',
+  'FAILED_LOGON_TO',
+  'AUTHENTICATED_TO',
+  'ATTEMPTED_LOGON_TO',
+  'CONNECTED_TO',
+  'USED_IP',
+  'RESOLVED_DOMAIN',
+  'RESOLVED_TO',
+  'EXECUTED_ON',
+  'HAS_HASH',
+  'RAN_AS',
+]

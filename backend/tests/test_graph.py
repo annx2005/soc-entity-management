@@ -343,6 +343,98 @@ def test_graph_api_accepts_multi_hop_depth(hops: int) -> None:
     assert graph_service.graph_calls[-1]["hops"] == hops
 
 
+def test_graph_api_passes_relationship_and_time_filters() -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get(
+        "/api/graph/entity-a?"
+        "relationship_type=CONNECTED_TO&relationship_type=USED_IP&"
+        "from_time=2026-07-02T00:00:00Z&to_time=2026-07-03T00:00:00Z",
+        headers={"Authorization": "Bearer test"},
+    )
+
+    assert response.status_code == 200
+    filters = graph_service.graph_calls[-1]["filters"]
+    assert filters.relationship_types == ["CONNECTED_TO", "USED_IP"]
+    assert filters.from_time == "2026-07-02T00:00:00Z"
+    assert filters.to_time == "2026-07-03T00:00:00Z"
+
+
+def test_graph_api_rejects_invalid_relationship_filter() -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get("/api/graph/entity-a?relationship_type=NOT_A_RELATIONSHIP", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 422
+
+
+def test_graph_api_rejects_invalid_time_window() -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get(
+        "/api/graph/entity-a?from_time=2026-07-03T00:00:00Z&to_time=2026-07-02T00:00:00Z",
+        headers={"Authorization": "Bearer test"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_graph_api_rejects_invalid_datetime_filter() -> None:
+    graph_service = FakeApiGraphService(
+        entities={
+            TENANT_ID: {
+                "entity-a": EntityResponse(
+                    id="entity-a",
+                    tenant_id=TENANT_ID,
+                    entity_type="ip",
+                    value="1.2.3.4",
+                )
+            }
+        }
+    )
+    client = graph_test_client(graph_service)
+
+    response = client.get("/api/graph/entity-a?from_time=not-a-date", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 422
+
+
 def test_graph_api_rejects_too_many_hops() -> None:
     graph_service = FakeApiGraphService(
         entities={
@@ -543,8 +635,8 @@ class FakeApiGraphService:
     async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100):
         return []
 
-    async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200):
-        self.graph_calls.append({"tenant_id": tenant_id, "entity_id": entity_id, "hops": hops, "limit": limit})
+    async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200, filters=None):
+        self.graph_calls.append({"tenant_id": tenant_id, "entity_id": entity_id, "hops": hops, "limit": limit, "filters": filters})
         return GraphResponse(nodes=[], edges=[])
 
     async def find_path(self, tenant_id: str, source_id: str, target_id: str, max_hops: int = 4, limit: int = 50):

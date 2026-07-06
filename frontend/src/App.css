@@ -73,7 +73,9 @@
 .filters label,
 .import-form label,
 .path-form label,
-.hop-select {
+.hop-select,
+.layout-select,
+.time-filter {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -91,7 +93,9 @@
 .import-form input:not([type="checkbox"]),
 .path-form input,
 .path-form select,
-.hop-select select {
+.hop-select select,
+.layout-select select,
+.time-filter input {
   min-width: 0;
   width: 100%;
   height: 40px;
@@ -600,14 +604,69 @@
   margin-bottom: 8px;
 }
 
-.hop-select {
+.graph-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.graph-controls {
+  display: grid;
+  grid-template-columns: 118px 170px repeat(2, minmax(170px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hop-select,
+.layout-select,
+.time-filter {
   width: 118px;
   height: 36px;
   padding: 0 8px;
 }
 
-.hop-select select {
+.layout-select,
+.time-filter {
+  width: auto;
+}
+
+.time-filter span {
+  color: #68746f;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hop-select select,
+.layout-select select,
+.time-filter input {
   height: 34px;
+}
+
+.relationship-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.relationship-filter button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid #dfe7e3;
+  border-radius: 6px;
+  background: #f8faf9;
+  color: #50615a;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.relationship-filter button.active {
+  background: #e9f4ef;
+  border-color: #76aa98;
+  color: #184634;
 }
 
 .graph-canvas,
@@ -821,10 +880,16 @@
 
   .filters,
   .import-preview,
+  .graph-controls,
   .path-form,
   .audit-row,
   .relationship-row {
     grid-template-columns: 1fr;
+  }
+
+  .graph-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .audit-row > div:last-child {

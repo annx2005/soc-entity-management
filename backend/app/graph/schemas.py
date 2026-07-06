@@ -67,6 +67,12 @@ class GraphResponse(BaseModel):
     edges: list[GraphEdge]
 
 
+class GraphQueryFilters(BaseModel):
+    relationship_types: list[str] = Field(default_factory=list)
+    from_time: Optional[str] = None
+    to_time: Optional[str] = None
+
+
 class GraphIngestResult(BaseModel):
     tenant_id: str
     event_id: str

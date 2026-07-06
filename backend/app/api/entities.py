@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.dependencies import TenantContext, get_tenant_context
 from app.graph.dependencies import get_graph_service
-from app.graph.schemas import EntityResponse, EvidenceResponse, GraphResponse, RelationshipResponse
+from app.graph.constants import validate_relationship_type
+from app.graph.schemas import EntityResponse, EvidenceResponse, GraphQueryFilters, GraphResponse, RelationshipResponse
 from app.graph.service import GraphService
 
 router = APIRouter(prefix="/api", tags=["graph"])
@@ -84,10 +86,19 @@ async def get_graph(
     graph: Annotated[GraphService, Depends(get_graph_service)],
     hops: Annotated[int, Query(ge=1, le=4)] = 1,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    relationship_type: Annotated[list[str] | None, Query()] = None,
+    from_time: Annotated[datetime | None, Query()] = None,
+    to_time: Annotated[datetime | None, Query()] = None,
 ) -> GraphResponse:
     tenant_id = _tenant_id_or_forbidden(context)
     await _require_entity(graph, tenant_id, entity_id)
-    return await graph.get_graph(tenant_id, entity_id, hops=hops, limit=limit)
+    return await graph.get_graph(
+        tenant_id,
+        entity_id,
+        hops=hops,
+        limit=limit,
+        filters=_graph_query_filters(relationship_type=relationship_type, from_time=from_time, to_time=to_time),
+    )
 
 
 def _tenant_id_or_forbidden(context: TenantContext) -> str:
@@ -101,3 +112,40 @@ async def _require_entity(graph: GraphService, tenant_id: str, entity_id: str) -
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="entity not found")
     return entity
+
+
+def _graph_query_filters(
+    *,
+    relationship_type: list[str] | None,
+    from_time: datetime | None,
+    to_time: datetime | None,
+) -> GraphQueryFilters:
+    try:
+        relationship_types = list(dict.fromkeys(validate_relationship_type(item) for item in relationship_type or []))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    normalized_from = _normalize_query_datetime(from_time)
+    normalized_to = _normalize_query_datetime(to_time)
+    if normalized_from is not None and normalized_to is not None and normalized_from > normalized_to:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="from_time must be before to_time")
+
+    return GraphQueryFilters(
+        relationship_types=relationship_types,
+        from_time=_datetime_to_query_value(normalized_from),
+        to_time=_datetime_to_query_value(normalized_to),
+    )
+
+
+def _normalize_query_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _datetime_to_query_value(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat().replace("+00:00", "Z")

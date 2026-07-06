@@ -8,7 +8,7 @@ from neo4j import AsyncGraphDatabase
 
 from app.entities.schemas import Entity, EntityType
 from app.graph.repository import GraphRepository
-from app.graph.schemas import RelationshipCandidate
+from app.graph.schemas import GraphQueryFilters, RelationshipCandidate
 from app.graph.service import GraphService
 from app.normalization.normalizer import normalize_event
 
@@ -69,14 +69,33 @@ async def _run_graph_repository_integration(uri: str) -> None:
         graph = await service.get_graph(tenant_id, "chain-user", hops=3, limit=50)
         path = await service.find_path(tenant_id, "chain-user", "chain-domain", max_hops=4, limit=10)
         cross_tenant_path = await service.find_path(tenant_id, "chain-user", "other-tenant-domain", max_hops=4, limit=10)
+        filtered_graph = await service.get_graph(
+            tenant_id,
+            "chain-host",
+            hops=1,
+            limit=10,
+            filters=GraphQueryFilters(relationship_types=["USED_IP"]),
+        )
+        filtered_time_graph = await service.get_graph(
+            tenant_id,
+            "chain-host",
+            hops=1,
+            limit=10,
+            filters=GraphQueryFilters(from_time="2026-07-03T00:00:00Z"),
+        )
 
         graph_entity_ids = {node.properties["id"] for node in graph.nodes}
         path_entity_ids = {node.properties["id"] for node in path.nodes}
+        filtered_entity_ids = {node.properties["id"] for node in filtered_graph.nodes}
         assert "chain-domain" in graph_entity_ids
         assert path_entity_ids == {"chain-user", "chain-host", "chain-ip", "chain-domain"}
         assert len(path.edges) == 3
         assert cross_tenant_path.nodes == []
         assert cross_tenant_path.edges == []
+        assert filtered_entity_ids == {"chain-host", "chain-ip"}
+        assert [edge.type for edge in filtered_graph.edges] == ["USED_IP"]
+        assert filtered_time_graph.nodes == []
+        assert filtered_time_graph.edges == []
     finally:
         await _delete_test_tenant(driver, tenant_id)
         await _delete_test_tenant(driver, "tenant-integration-other")

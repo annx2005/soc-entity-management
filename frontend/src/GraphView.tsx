@@ -1,11 +1,17 @@
 import cytoscape from 'cytoscape'
-import { useEffect, useRef } from 'react'
-import type { Core, ElementDefinition } from 'cytoscape'
-import type { GraphResponse } from './types'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import type { Core, ElementDefinition, NodeSingular } from 'cytoscape'
+import type { GraphLayout, GraphResponse } from './types'
 
 type GraphViewProps = {
   graph: GraphResponse | null
   selectedEntityId: string | null
+  layout?: GraphLayout
+  onNodeSelect?: (entityId: string) => void
+}
+
+export type GraphViewHandle = {
+  exportPng: () => string | null
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -17,9 +23,20 @@ const TYPE_COLORS: Record<string, string> = {
   process: '#4e647a',
 }
 
-export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
+export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function GraphView(
+  { graph, selectedEntityId, layout = 'force-directed', onNodeSelect },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      exportPng: () => cyRef.current?.png({ bg: '#f7f9f8', full: false, scale: 2 }) ?? null,
+    }),
+    [],
+  )
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -85,13 +102,12 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
           },
         },
       ],
-      layout: {
-        name: 'cose',
-        animate: false,
-        nodeRepulsion: 9000,
-        idealEdgeLength: 110,
-        componentSpacing: 80,
-      },
+      layout: layoutOptions(layout),
+    })
+
+    cy.on('tap', 'node', (event) => {
+      const entityId = stringValue((event.target as NodeSingular).data('entityId'))
+      if (entityId) onNodeSelect?.(entityId)
     })
 
     const selectedNode = cy
@@ -106,14 +122,14 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
     }
-  }, [graph, selectedEntityId])
+  }, [graph, layout, onNodeSelect, selectedEntityId])
 
   if (!graph || graph.nodes.length === 0) {
     return <div className="graph-empty">No graph data</div>
   }
 
   return <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
-}
+})
 
 function toElements(graph: GraphResponse | null): ElementDefinition[] {
   if (!graph) return []
@@ -143,6 +159,26 @@ function toElements(graph: GraphResponse | null): ElementDefinition[] {
   }))
 
   return [...nodes, ...edges]
+}
+
+function layoutOptions(layout: GraphLayout) {
+  if (layout === 'hierarchical') {
+    return {
+      name: 'breadthfirst',
+      animate: false,
+      directed: true,
+      padding: 32,
+      spacingFactor: 1.25,
+    }
+  }
+
+  return {
+    name: 'cose',
+    animate: false,
+    nodeRepulsion: 9000,
+    idealEdgeLength: 110,
+    componentSpacing: 80,
+  }
 }
 
 function stringValue(value: unknown): string {
