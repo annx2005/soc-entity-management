@@ -150,6 +150,15 @@ jobs:
           kubectl describe statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" || true
           kubectl describe statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" || true
           kubectl describe statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" || true
+          kubectl describe deployment/soc-entity-management-prometheus -n "$K8S_NAMESPACE" || true
+          kubectl describe deployment/soc-entity-management-grafana -n "$K8S_NAMESPACE" || true
+          kubectl describe deployment/soc-entity-management-kafka-exporter -n "$K8S_NAMESPACE" || true
           kubectl logs pod/soc-entity-management-postgresql-0 -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
           kubectl logs pod/soc-entity-management-kafka-0 -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
           kubectl logs pod/soc-entity-management-neo4j-0 -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
+          kubectl logs deployment/soc-entity-management-prometheus -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
+          kubectl logs deployment/soc-entity-management-prometheus -n "$K8S_NAMESPACE" --all-containers --previous --tail=200 || true
+          kubectl logs deployment/soc-entity-management-grafana -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
+          kubectl logs deployment/soc-entity-management-grafana -n "$K8S_NAMESPACE" --all-containers --previous --tail=200 || true
+          kubectl logs deployment/soc-entity-management-kafka-exporter -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
+          kubectl logs deployment/soc-entity-management-kafka-exporter -n "$K8S_NAMESPACE" --all-containers --previous --tail=200 || true

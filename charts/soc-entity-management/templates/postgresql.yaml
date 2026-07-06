@@ -39,17 +39,17 @@ spec:
               value: /var/lib/postgresql/data/pgdata
           startupProbe:
             exec:
-              command: ["pg_isready", "-U", "{{ .Values.postgresql.auth.username }}"]
+              command: ["pg_isready", "-U", "{{ .Values.postgresql.auth.username }}", "-d", "{{ .Values.postgresql.auth.database }}"]
             failureThreshold: 30
             periodSeconds: 10
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "{{ .Values.postgresql.auth.username }}"]
+              command: ["pg_isready", "-U", "{{ .Values.postgresql.auth.username }}", "-d", "{{ .Values.postgresql.auth.database }}"]
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "{{ .Values.postgresql.auth.username }}"]
+              command: ["pg_isready", "-U", "{{ .Values.postgresql.auth.username }}", "-d", "{{ .Values.postgresql.auth.database }}"]
             initialDelaySeconds: 30
             periodSeconds: 20
           volumeMounts:
