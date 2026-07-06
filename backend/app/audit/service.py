@@ -78,3 +78,21 @@ class AuditLogger:
                 metadata=metadata,
             )
             db.commit()
+
+    def record_many(self, entries: Iterable[dict[str, Any]]) -> None:
+        rows = [
+            AuditLog(
+                tenant_id=entry.get("tenant_id"),
+                action=str(entry.get("action")),
+                actor=str(entry.get("actor") or self._actor),
+                target_type=str(entry.get("target_type")),
+                target_id=entry.get("target_id"),
+                metadata_json=entry.get("metadata") or {},
+            )
+            for entry in entries
+        ]
+        if not rows:
+            return
+        with self._session_factory() as db:
+            db.add_all(rows)
+            db.commit()

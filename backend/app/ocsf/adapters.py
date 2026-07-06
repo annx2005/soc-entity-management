@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from pydantic import ValidationError
+
 from app.core.config import get_settings
 from app.normalization.helpers import (
     get_nested,
@@ -29,6 +31,12 @@ def register_adapter(source_name: str, event_key: str, adapter: OCSFAdapter) -> 
 
 
 def normalize_to_ocsf(record: dict[str, Any]) -> OCSFEvent:
+    if _looks_like_ocsf_event(record):
+        try:
+            return OCSFEvent.model_validate(record)
+        except ValidationError as exc:
+            raise UnsupportedEventError(f"invalid OCSF event: {exc}") from exc
+
     event_id = str(record.get("id") or record.get("_id") or "")
     if not event_id:
         raise UnsupportedEventError("missing event id")
@@ -39,6 +47,11 @@ def normalize_to_ocsf(record: dict[str, Any]) -> OCSFEvent:
         raise UnsupportedEventError(f"unsupported event type: source={source_name}, event_key={event_key}")
 
     return adapter.normalize(record, event_id)
+
+
+def _looks_like_ocsf_event(record: dict[str, Any]) -> bool:
+    metadata = record.get("metadata")
+    return isinstance(metadata, dict) and bool(metadata.get("version")) and "class_uid" in record and "event_id" in record
 
 
 class AuthenticationAdapter:

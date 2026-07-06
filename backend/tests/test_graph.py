@@ -16,6 +16,7 @@ from app.graph.constants import label_for_entity_type, validate_relationship_typ
 from app.graph.dependencies import get_graph_service
 from app.graph.inference import infer_relationships
 from app.graph.repository import _merge_properties
+from app.graph.repository import GraphRepository
 from app.graph.kafka_service import process_ocsf_event_message
 from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphResponse, RelationshipResponse
 from app.graph.service import GraphService
@@ -129,7 +130,12 @@ def test_infer_all_initial_relationship_rules() -> None:
         "ATTEMPTED_LOGON_TO",
     ]
     assert {rel.relationship_type for rel in infer_relationships(dns, extract_entities(dns))} == {"RESOLVED_DOMAIN", "RESOLVED_TO"}
-    assert {rel.relationship_type for rel in infer_relationships(process, extract_entities(process))} == {"EXECUTED_ON", "HAS_HASH", "RAN_AS"}
+    assert {rel.relationship_type for rel in infer_relationships(process, extract_entities(process))} == {
+        "EXECUTED_ON",
+        "HAS_HASH",
+        "PROCESS_ACCESSED_URL",
+        "RAN_AS",
+    }
 
 
 def test_infer_auth_relationships_connect_source_ip_to_host() -> None:
@@ -246,6 +252,64 @@ def test_process_ocsf_event_message_runs_graph_flow() -> None:
 
     assert result.status == "processed"
     assert len(repo.events) == 1
+
+
+def test_graph_service_process_events_batch_uses_repository_bulk_methods() -> None:
+    repo = BulkFakeGraphRepository()
+    service = GraphService(repo, audit_logger=FakeAuditLogger())
+    success = auth_event("4624")
+    failure = auth_event("4625")
+    success.event_id = "bulk-success"
+    failure.event_id = "bulk-failure"
+
+    results = asyncio.run(service.process_events_batch([success, failure]))
+
+    assert [result.status for result in results] == ["processed", "processed"]
+    assert repo.bulk_calls == ["events", "entities", "observations", "relationships", "relationships"]
+    assert len(repo.events) == 2
+    assert len(repo.observations) == sum(result.observations for result in results)
+    assert len(repo.relationship_facts) == sum(result.relationships for result in results)
+
+
+def test_infer_relationships_for_advanced_entity_types() -> None:
+    event = OCSFEvent(
+        metadata={"version": "1.2.0"},
+        time=1783000000000,
+        class_uid=1007,
+        class_name="Process Activity",
+        category_uid=1,
+        category_name="System Activity",
+        activity_id=1,
+        activity_name="Launch",
+        type_uid=100701,
+        type_name="Process Activity: Launch",
+        tenant_id="tenant-acme",
+        event_id="advanced-1",
+        source_name="ocsf",
+        raw_data={},
+        actor={"user": {"name": "alice", "email": "alice@example.com"}},
+        device={"hostname": "host-a"},
+        process={"file": {"path": r"C:\Tools\curl.exe"}, "cmd_line": "curl https://api.example.com/a"},
+        resource={"arn": "arn:aws:s3:::bucket-a", "provider": "aws", "service": "s3", "type": "bucket"},
+    )
+
+    relationships = infer_relationships(event, extract_entities(event))
+
+    assert {
+        "EXECUTED_ON",
+        "RAN_AS",
+        "USER_HAS_EMAIL",
+        "PROCESS_ACCESSED_URL",
+        "ACCESSED_CLOUD_RESOURCE",
+    }.issubset({relationship.relationship_type for relationship in relationships})
+
+
+def test_graph_repository_query_plans_use_batch_indexes_and_union() -> None:
+    assert "CREATE FULLTEXT INDEX entity_value_fulltext_idx" in _source(GraphRepository.ensure_schema)
+    assert "obs.entity_id" in _source(GraphRepository.upsert_observation)
+    assert "CALL {" in _source(GraphRepository.list_relationships)
+    assert "UNION" in _source(GraphRepository.list_relationships)
+    assert "db.index.fulltext.queryNodes" in _source(GraphRepository.list_entities)
 
 
 def test_entities_api_uses_tenant_context_and_returns_404_cross_tenant() -> None:
@@ -553,6 +617,59 @@ class FakeGraphRepository:
         return status
 
 
+class BulkFakeGraphRepository(FakeGraphRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.bulk_calls = []
+
+    async def upsert_events(self, events) -> dict[str, str]:
+        self.bulk_calls.append("events")
+        for event in events:
+            await self.upsert_event(event)
+        return {event.event_id: event.event_id for event in events}
+
+    async def upsert_entities(self, entities) -> dict[str, str]:
+        self.bulk_calls.append("entities")
+        statuses = {}
+        for entity in entities:
+            statuses[entity.id] = await self.upsert_entity(entity)
+        return statuses
+
+    async def upsert_observations(self, observations) -> list[str]:
+        self.bulk_calls.append("observations")
+        ids = []
+        for event, entity in observations:
+            ids.append(await self.upsert_observation(event, entity))
+        return ids
+
+    async def upsert_relationships(self, tenant_id: str, candidates) -> dict[tuple[str, str, str], str]:
+        self.bulk_calls.append("relationships")
+        statuses = {}
+        for candidate in candidates:
+            statuses[(candidate.relationship_type, candidate.from_id, candidate.to_id)] = await self.upsert_relationship(tenant_id, candidate)
+        return statuses
+
+    async def upsert_observation(self, event: OCSFEvent, entity) -> str:
+        field_path = entity.properties.get("source_field") or "unknown"
+        key = (event.tenant_id, event.event_id, entity.id, field_path)
+        self.observations.add(key)
+        return ":".join(key)
+
+    async def upsert_relationship(self, tenant_id: str, candidate) -> None:
+        fact_key = (tenant_id, candidate.relationship_type, candidate.from_id, candidate.to_id)
+        status = "updated" if fact_key in self.relationship_facts else "created"
+        fact = self.relationship_facts.setdefault(
+            fact_key,
+            {"count": 0, "sample_evidence_refs": []},
+        )
+        if candidate.evidence_ref in self.evidence_links[fact_key]:
+            return status
+        self.evidence_links[fact_key].add(candidate.evidence_ref)
+        fact["count"] += 1
+        fact["sample_evidence_refs"] = (fact["sample_evidence_refs"] + [candidate.evidence_ref])[-50:]
+        return status
+
+
 class FakeEnrichmentService:
     async def enrich_entities(self, tenant_id: str, entities):
         enriched = []
@@ -661,3 +778,9 @@ def graph_test_client(graph_service: FakeApiGraphService, *, platform: bool = Fa
     app.dependency_overrides[get_tenant_context] = override_context
     app.dependency_overrides[get_graph_service] = override_graph_service
     return TestClient(app)
+
+
+def _source(obj) -> str:
+    import inspect
+
+    return inspect.getsource(obj)

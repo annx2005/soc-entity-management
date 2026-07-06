@@ -12,6 +12,7 @@ from app.database.models import AuditLog, ErrorRecord, IngestionBatch, Ingestion
 from app.database.session import Base
 from app.ingestion.kafka_messages import DeadLetterMessage, OCSFEventMessage, RawEventMessage
 from app.ingestion.kafka_service import enqueue_jsonl_stream, process_raw_event_message
+from app.ingestion.kafka_service import process_raw_event_messages
 
 
 class FakePublisher:
@@ -196,3 +197,85 @@ def test_process_raw_event_message_counts_duplicate_event_as_processed_without_r
         assert updated_batch.status == "completed"
         assert len(publisher.sent) == 1
         assert isinstance(publisher.sent[0][1], OCSFEventMessage)
+
+
+def ocsf_auth_event(event_id: str = "ocsf-evt-1", tenant_id: str = "raw-tenant") -> dict:
+    return {
+        "metadata": {"version": "1.2.0", "uid": event_id},
+        "time": 1783000000000,
+        "class_uid": 3002,
+        "class_name": "Authentication",
+        "category_uid": 3,
+        "category_name": "Identity & Access Management",
+        "activity_id": 1,
+        "activity_name": "Logon",
+        "type_uid": 300201,
+        "type_name": "Authentication: Logon",
+        "severity_id": 1,
+        "tenant_id": tenant_id,
+        "event_id": event_id,
+        "source_name": "ocsf-direct",
+        "raw_data": {},
+        "unmapped": {"event_type": "ocsf_auth"},
+        "actor": {"user": {"name": "alice", "email": "alice@example.com"}},
+        "device": {"hostname": "host-a"},
+    }
+
+
+def test_process_raw_event_message_accepts_ocsf_passthrough_and_overrides_tenant() -> None:
+    publisher = FakePublisher()
+
+    with sqlite_session() as db:
+        batch = IngestionBatch(source_name="ocsf.jsonl", status="queued", total_records=1)
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)
+
+        message = RawEventMessage(
+            batch_id=batch.id,
+            tenant_id="trusted-tenant",
+            source_name=batch.source_name,
+            line_number=1,
+            raw_line=json.dumps(ocsf_auth_event()),
+        )
+        asyncio.run(process_raw_event_message(db, message, publisher))
+
+        history = db.scalar(select(IngestionHistory))
+        assert history is not None
+        assert history.event_id == "ocsf-evt-1"
+        assert history.normalized_event["tenant_id"] == "trusted-tenant"
+        assert history.normalized_event["unmapped"]["raw_tenant_id"] == "raw-tenant"
+        assert publisher.sent[0][1].ocsf_event["source_name"] == "ocsf-direct"
+
+
+def test_process_raw_event_messages_batches_success_errors_duplicates_and_dlq() -> None:
+    publisher = FakePublisher()
+
+    with sqlite_session() as db:
+        batch = IngestionBatch(source_name="batch.jsonl", status="queued", total_records=4)
+        db.add(batch)
+        db.commit()
+        db.refresh(batch)
+
+        messages = [
+            RawEventMessage(batch_id=batch.id, tenant_id="trusted-tenant", source_name=batch.source_name, line_number=1, raw_line=json.dumps(sysmon_dns_record("batch-1"))),
+            RawEventMessage(batch_id=batch.id, tenant_id="trusted-tenant", source_name=batch.source_name, line_number=2, raw_line=json.dumps(sysmon_dns_record("batch-1"))),
+            RawEventMessage(batch_id=batch.id, tenant_id="trusted-tenant", source_name=batch.source_name, line_number=3, raw_line="{bad json"),
+            RawEventMessage(batch_id=batch.id, tenant_id="trusted-tenant", source_name=batch.source_name, line_number=4, raw_line=json.dumps({"id": "unsupported", "data": {}})),
+        ]
+
+        asyncio.run(process_raw_event_messages(db, messages, publisher))
+
+        histories = db.scalars(select(IngestionHistory)).all()
+        errors = db.scalars(select(ErrorRecord).order_by(ErrorRecord.line_number)).all()
+        updated_batch = db.get(IngestionBatch, batch.id)
+        payload_types = [type(sent[1]) for sent in publisher.sent]
+
+        assert len(histories) == 1
+        assert [error.error_type for error in errors] == ["json_parse_error", "unsupported_event"]
+        assert updated_batch is not None
+        assert updated_batch.status == "completed"
+        assert updated_batch.normalized_records == 2
+        assert updated_batch.error_records == 2
+        assert payload_types.count(OCSFEventMessage) == 1
+        assert payload_types.count(DeadLetterMessage) == 2

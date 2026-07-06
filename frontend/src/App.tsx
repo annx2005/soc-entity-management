@@ -659,9 +659,7 @@ type ImportDataPanelProps = {
 };
 
 function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
-  const [filePath, setFilePath] = useState(
-    "/data/raw/fake-multitenant-wazuh.jsonl",
-  );
+
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<IngestFileResponse | null>(null);
   const [normalized, setNormalized] = useState<NormalizedEvent[]>([]);
@@ -736,15 +734,15 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!file && !filePath.trim()) {
-      setError("Choose a file or enter a file path.");
+    if (!file) {
+      setError("Choose a file to upload.");
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
-      const nextResult = await ingestFile(token, { file, filePath });
+      const nextResult = await ingestFile(token, { file });
       setResult(nextResult);
       await loadBatchPreview(nextResult.batch_id);
       if (nextResult.status === "completed" || nextResult.status === "failed") {
@@ -784,17 +782,7 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
         className="import-form"
         onSubmit={(event) => void handleSubmit(event)}
       >
-        <label>
-          <FileText size={15} />
-          <input
-            value={filePath}
-            onChange={(event) => {
-              setFilePath(event.target.value);
-              if (event.target.value.trim()) setFile(null);
-            }}
-            placeholder="Path inside backend container"
-          />
-        </label>
+
         <label className="file-picker">
           <FileUp size={15} />
           <input
@@ -803,7 +791,7 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
             onChange={(event) => {
               const nextFile = event.target.files?.[0] ?? null;
               setFile(nextFile);
-              if (nextFile) setFilePath("");
+
             }}
           />
           <span>{file ? file.name : "Upload JSONL file"}</span>

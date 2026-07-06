@@ -9,3 +9,8 @@ from app.ocsf.schemas import OCSFEvent
 async def process_ocsf_event_message(message: OCSFEventMessage, graph: GraphService) -> GraphIngestResult:
     event = OCSFEvent.model_validate(message.ocsf_event)
     return await graph.process_event(event)
+
+
+async def process_ocsf_event_messages(messages: list[OCSFEventMessage], graph: GraphService) -> list[GraphIngestResult]:
+    events = [OCSFEvent.model_validate(message.ocsf_event) for message in messages]
+    return await graph.process_events_batch(events)

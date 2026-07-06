@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
@@ -30,6 +31,12 @@ class GraphRepository:
             "CREATE INDEX relationship_fact_tenant_type_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.relationship_type)",
             "CREATE INDEX relationship_fact_tenant_from_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.from_id)",
             "CREATE INDEX relationship_fact_tenant_to_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.to_id)",
+            "CREATE INDEX entity_tenant_last_seen_idx IF NOT EXISTS FOR (n:Entity) ON (n.tenant_id, n.last_seen)",
+            "CREATE INDEX entity_tenant_type_last_seen_idx IF NOT EXISTS FOR (n:Entity) ON (n.tenant_id, n.entity_type, n.last_seen)",
+            "CREATE INDEX observation_tenant_entity_observed_idx IF NOT EXISTS FOR (n:Observation) ON (n.tenant_id, n.entity_id, n.observed_at)",
+            "CREATE INDEX relationship_fact_tenant_from_last_seen_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.from_id, n.last_seen)",
+            "CREATE INDEX relationship_fact_tenant_to_last_seen_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.to_id, n.last_seen)",
+            "CREATE FULLTEXT INDEX entity_value_fulltext_idx IF NOT EXISTS FOR (n:Entity) ON EACH [n.value]",
         ]
         async with self._driver.session() as session:
             for statement in statements:
@@ -75,6 +82,51 @@ class GraphRepository:
             )
             record = await result.single()
             return str(record["id"])
+
+    async def upsert_events(self, events: list[OCSFEvent]) -> dict[str, str]:
+        rows = [
+            {
+                "id": graph_event_id(event.tenant_id, event.event_id),
+                "tenant_id": event.tenant_id,
+                "event_id": event.event_id,
+                "time": _event_time_iso(event),
+                "class_uid": event.class_uid,
+                "class_name": event.class_name,
+                "activity_id": event.activity_id,
+                "activity_name": event.activity_name,
+                "source_name": event.source_name,
+                "ocsf_version": str(event.metadata.get("version", "1.2.0")),
+            }
+            for event in events
+        ]
+        if not rows:
+            return {}
+        query = """
+        UNWIND $rows AS row
+        MERGE (event:Event {id: row.id})
+        ON CREATE SET
+            event.tenant_id = row.tenant_id,
+            event.event_id = row.event_id,
+            event.time = datetime(row.time),
+            event.class_uid = row.class_uid,
+            event.class_name = row.class_name,
+            event.activity_id = row.activity_id,
+            event.activity_name = row.activity_name,
+            event.source_name = row.source_name,
+            event.ocsf_version = row.ocsf_version
+        ON MATCH SET
+            event.time = datetime(row.time),
+            event.class_uid = row.class_uid,
+            event.class_name = row.class_name,
+            event.activity_id = row.activity_id,
+            event.activity_name = row.activity_name,
+            event.source_name = row.source_name,
+            event.ocsf_version = row.ocsf_version
+        RETURN row.event_id AS event_id, event.id AS id
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, rows=rows)
+            return {str(record["event_id"]): str(record["id"]) async for record in result}
 
     async def upsert_entity(self, entity: Entity) -> str:
         label = label_for_entity_type(entity.type)
@@ -123,6 +175,68 @@ class GraphRepository:
             record = await result.single()
             return str(record["status"])
 
+    async def upsert_entities(self, entities: list[Entity]) -> dict[str, str]:
+        if not entities:
+            return {}
+        properties_by_id = await self._merged_entity_properties_batch(entities)
+        statuses: dict[str, str] = {}
+        grouped: dict[EntityType, list[Entity]] = {}
+        for entity in entities:
+            grouped.setdefault(entity.type, []).append(entity)
+
+        async with self._driver.session() as session:
+            for entity_type, group in grouped.items():
+                label = label_for_entity_type(entity_type)
+                rows = []
+                for entity in group:
+                    properties = properties_by_id[entity.id]
+                    rows.append(
+                        {
+                            "id": entity.id,
+                            "tenant_id": entity.tenant_id,
+                            "entity_type": entity.type.value,
+                            "value": entity.value,
+                            "first_seen": entity.first_seen,
+                            "last_seen": entity.last_seen,
+                            "source": entity.source,
+                            "properties_json": _json_dumps(properties),
+                            "promoted_properties": _promoted_properties(entity.model_copy(update={"properties": properties})),
+                        }
+                    )
+                query = f"""
+                UNWIND $rows AS row
+                MERGE (entity:Entity:{label} {{id: row.id}})
+                ON CREATE SET
+                    entity.tenant_id = row.tenant_id,
+                    entity.entity_type = row.entity_type,
+                    entity.value = row.value,
+                    entity.first_seen = datetime(row.first_seen),
+                    entity.last_seen = datetime(row.last_seen),
+                    entity.source = row.source,
+                    entity.properties_json = row.properties_json,
+                    entity.audit_created = true
+                ON MATCH SET
+                    entity.first_seen = CASE
+                        WHEN datetime(row.first_seen) < entity.first_seen THEN datetime(row.first_seen)
+                        ELSE entity.first_seen
+                    END,
+                    entity.last_seen = CASE
+                        WHEN datetime(row.last_seen) > entity.last_seen THEN datetime(row.last_seen)
+                        ELSE entity.last_seen
+                    END,
+                    entity.source = row.source,
+                    entity.properties_json = row.properties_json,
+                    entity.audit_created = false
+                SET entity += row.promoted_properties
+                WITH row, entity, entity.audit_created AS was_created
+                REMOVE entity.audit_created
+                RETURN row.id AS id, CASE WHEN was_created THEN 'created' ELSE 'updated' END AS status
+                """
+                result = await session.run(query, rows=rows)
+                async for record in result:
+                    statuses[str(record["id"])] = str(record["status"])
+        return statuses
+
     async def _merged_entity_properties(self, entity: Entity) -> dict[str, Any]:
         query = "MATCH (entity:Entity {id: $id, tenant_id: $tenant_id}) RETURN entity.properties_json AS properties_json"
         async with self._driver.session() as session:
@@ -130,6 +244,21 @@ class GraphRepository:
             record = await result.single()
         existing = _json_loads(record["properties_json"]) if record else {}
         return _merge_properties(existing, entity.properties)
+
+    async def _merged_entity_properties_batch(self, entities: list[Entity]) -> dict[str, dict[str, Any]]:
+        query = """
+        MATCH (entity:Entity)
+        WHERE entity.id IN $ids
+        RETURN entity.id AS id, entity.properties_json AS properties_json
+        """
+        ids = list({entity.id for entity in entities})
+        async with self._driver.session() as session:
+            result = await session.run(query, ids=ids)
+            existing = {str(record["id"]): _json_loads(record["properties_json"]) async for record in result}
+        merged = {}
+        for entity in entities:
+            merged[entity.id] = _merge_properties(existing.get(entity.id, {}), entity.properties)
+        return merged
 
     async def upsert_observation(self, event: OCSFEvent, entity: Entity) -> str:
         field_path = str(entity.properties.get("source_field") or "unknown")
@@ -141,12 +270,14 @@ class GraphRepository:
         ON CREATE SET
             obs.tenant_id = $tenant_id,
             obs.field_path = $field_path,
+            obs.entity_id = $entity_id,
             obs.entity_type = $entity_type,
             obs.value = $value,
             obs.observed_at = datetime($observed_at),
             obs.confidence = 1.0
         ON MATCH SET
             obs.value = $value,
+            obs.entity_id = $entity_id,
             obs.observed_at = datetime($observed_at)
         MERGE (event)-[:OBSERVED]->(obs)
         MERGE (obs)-[:OF_ENTITY]->(entity)
@@ -166,6 +297,49 @@ class GraphRepository:
             )
             record = await result.single()
             return str(record["id"])
+
+    async def upsert_observations(self, event_entities: list[tuple[OCSFEvent, Entity]]) -> list[str]:
+        rows = []
+        for event, entity in event_entities:
+            field_path = str(entity.properties.get("source_field") or "unknown")
+            rows.append(
+                {
+                    "event_graph_id": graph_event_id(event.tenant_id, event.event_id),
+                    "tenant_id": event.tenant_id,
+                    "entity_id": entity.id,
+                    "id": observation_id(event.tenant_id, event.event_id, entity.id, field_path),
+                    "field_path": field_path,
+                    "entity_type": entity.type.value,
+                    "value": entity.value,
+                    "observed_at": entity.first_seen,
+                }
+            )
+        if not rows:
+            return []
+        query = """
+        UNWIND $rows AS row
+        MATCH (event:Event {id: row.event_graph_id, tenant_id: row.tenant_id})
+        MATCH (entity:Entity {id: row.entity_id, tenant_id: row.tenant_id})
+        MERGE (obs:Observation {id: row.id})
+        ON CREATE SET
+            obs.tenant_id = row.tenant_id,
+            obs.field_path = row.field_path,
+            obs.entity_id = row.entity_id,
+            obs.entity_type = row.entity_type,
+            obs.value = row.value,
+            obs.observed_at = datetime(row.observed_at),
+            obs.confidence = 1.0
+        ON MATCH SET
+            obs.value = row.value,
+            obs.entity_id = row.entity_id,
+            obs.observed_at = datetime(row.observed_at)
+        MERGE (event)-[:OBSERVED]->(obs)
+        MERGE (obs)-[:OF_ENTITY]->(entity)
+        RETURN obs.id AS id
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, rows=rows)
+            return [str(record["id"]) async for record in result]
 
     async def upsert_relationship(self, tenant_id: str, candidate: RelationshipCandidate) -> str:
         relationship_type = validate_relationship_type(candidate.relationship_type)
@@ -236,6 +410,85 @@ class GraphRepository:
             record = await result.single()
             return str(record["status"])
 
+    async def upsert_relationships(self, tenant_id: str, candidates: list[RelationshipCandidate]) -> dict[tuple[str, str, str], str]:
+        if not candidates:
+            return {}
+        grouped: dict[str, list[RelationshipCandidate]] = {}
+        for candidate in candidates:
+            relationship_type = validate_relationship_type(candidate.relationship_type)
+            grouped.setdefault(relationship_type, []).append(candidate)
+
+        statuses: dict[tuple[str, str, str], str] = {}
+        async with self._driver.session() as session:
+            for relationship_type, group in grouped.items():
+                rows = [
+                    {
+                        "from_id": candidate.from_id,
+                        "to_id": candidate.to_id,
+                        "event_graph_id": graph_event_id(tenant_id, candidate.evidence_ref),
+                        "fact_id": relationship_fact_id(tenant_id, relationship_type, candidate.from_id, candidate.to_id),
+                        "evidence_ref": candidate.evidence_ref,
+                        "observed_at": candidate.observed_at,
+                    }
+                    for candidate in group
+                ]
+                query = f"""
+                UNWIND $rows AS row
+                MATCH (from_entity:Entity {{id: row.from_id, tenant_id: $tenant_id}})
+                MATCH (to_entity:Entity {{id: row.to_id, tenant_id: $tenant_id}})
+                MATCH (event:Event {{id: row.event_graph_id, tenant_id: $tenant_id}})
+                MERGE (fact:RelationshipFact {{id: row.fact_id}})
+                ON CREATE SET
+                    fact.tenant_id = $tenant_id,
+                    fact.relationship_type = $relationship_type,
+                    fact.from_id = row.from_id,
+                    fact.to_id = row.to_id,
+                    fact.first_seen = datetime(row.observed_at),
+                    fact.last_seen = datetime(row.observed_at),
+                    fact.count = 0,
+                    fact.sample_evidence_refs = [],
+                    fact.audit_created = true
+                ON MATCH SET
+                    fact.audit_created = false
+                WITH row, from_entity, to_entity, event, fact
+                OPTIONAL MATCH (event)-[existing:EVIDENCES]->(fact)
+                WITH row, from_entity, to_entity, event, fact, existing IS NULL AS is_new, fact.audit_created AS was_created
+                MERGE (event)-[:EVIDENCES]->(fact)
+                SET
+                    fact.first_seen = CASE
+                        WHEN datetime(row.observed_at) < fact.first_seen THEN datetime(row.observed_at)
+                        ELSE fact.first_seen
+                    END,
+                    fact.last_seen = CASE
+                        WHEN datetime(row.observed_at) > fact.last_seen THEN datetime(row.observed_at)
+                        ELSE fact.last_seen
+                    END,
+                    fact.count = fact.count + CASE WHEN is_new THEN 1 ELSE 0 END,
+                    fact.sample_evidence_refs = CASE
+                        WHEN is_new AND NOT row.evidence_ref IN fact.sample_evidence_refs
+                        THEN (fact.sample_evidence_refs + row.evidence_ref)[-50..]
+                        ELSE fact.sample_evidence_refs
+                    END
+                MERGE (from_entity)-[rel:{relationship_type}]->(to_entity)
+                ON CREATE SET
+                    rel.tenant_id = $tenant_id,
+                    rel.relationship_type = $relationship_type,
+                    rel.fact_id = row.fact_id,
+                    rel.first_seen = datetime(row.observed_at),
+                    rel.last_seen = datetime(row.observed_at),
+                    rel.count = 0
+                SET
+                    rel.first_seen = fact.first_seen,
+                    rel.last_seen = fact.last_seen,
+                    rel.count = fact.count
+                REMOVE fact.audit_created
+                RETURN row.from_id AS from_id, row.to_id AS to_id, CASE WHEN was_created THEN 'created' ELSE 'updated' END AS status
+                """
+                result = await session.run(query, rows=rows, tenant_id=tenant_id, relationship_type=relationship_type)
+                async for record in result:
+                    statuses[(relationship_type, str(record["from_id"]), str(record["to_id"]))] = str(record["status"])
+        return statuses
+
     async def get_entity(self, tenant_id: str, entity_id: str) -> EntityResponse | None:
         query = "MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id}) RETURN entity"
         async with self._driver.session() as session:
@@ -257,8 +510,31 @@ class GraphRepository:
             clauses.append("entity.entity_type = $entity_type")
             params["entity_type"] = entity_type
         if value:
+            normalized_value = value.strip().lower()
             clauses.append("entity.value CONTAINS $value")
-            params["value"] = value
+            params["value"] = normalized_value
+            params["fulltext_value"] = _fulltext_prefix_query(normalized_value)
+            params["exact_value"] = normalized_value
+        if value and not entity_type and params["fulltext_value"]:
+            query = """
+            CALL {
+                MATCH (entity:Entity {tenant_id: $tenant_id, value: $exact_value})
+                RETURN entity, 0 AS rank
+                UNION
+                CALL db.index.fulltext.queryNodes('entity_value_fulltext_idx', $fulltext_value) YIELD node, score
+                WITH node AS entity, score
+                WHERE entity.tenant_id = $tenant_id
+                RETURN entity, 1 AS rank
+            }
+            WITH entity, min(rank) AS rank
+            RETURN entity
+            ORDER BY rank ASC, entity.last_seen DESC
+            SKIP $offset
+            LIMIT $limit
+            """
+            async with self._driver.session() as session:
+                result = await session.run(query, **params)
+                return [_entity_response(record["entity"]) async for record in result]
         query = f"""
         MATCH (entity:Entity)
         WHERE {" AND ".join(clauses)}
@@ -294,8 +570,13 @@ class GraphRepository:
 
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
         query = """
-        MATCH (fact:RelationshipFact {tenant_id: $tenant_id})
-        WHERE fact.from_id = $entity_id OR fact.to_id = $entity_id
+        CALL {
+            MATCH (fact:RelationshipFact {tenant_id: $tenant_id, from_id: $entity_id})
+            RETURN fact
+            UNION
+            MATCH (fact:RelationshipFact {tenant_id: $tenant_id, to_id: $entity_id})
+            RETURN fact
+        }
         RETURN fact
         ORDER BY fact.last_seen DESC
         LIMIT $limit
@@ -307,7 +588,8 @@ class GraphRepository:
     async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[EvidenceResponse]:
         query = """
         MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id})
-        MATCH (event:Event {tenant_id: $tenant_id})-[:OBSERVED]->(obs:Observation)-[:OF_ENTITY]->(entity)
+        MATCH (obs:Observation {tenant_id: $tenant_id, entity_id: $entity_id})-[:OF_ENTITY]->(entity)
+        MATCH (event:Event {tenant_id: $tenant_id})-[:OBSERVED]->(obs)
         RETURN event, obs
         ORDER BY event.time DESC
         LIMIT $limit
@@ -460,6 +742,11 @@ def _json_loads(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _fulltext_prefix_query(value: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", value.lower())
+    return " AND ".join(f"{token}*" for token in tokens)
 
 
 def _merge_properties(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:

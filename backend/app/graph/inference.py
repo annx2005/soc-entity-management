@@ -37,6 +37,7 @@ def infer_relationships(event: OCSFEvent, entities: list[Entity]) -> list[Relati
         ip_relationship_type = "AUTHENTICATED_TO" if successful_auth else "ATTEMPTED_LOGON_TO"
         add(user_relationship_type, user, host)
         add(ip_relationship_type, source_ip, host)
+        _add_user_email_relationships(add, user, entities)
 
     elif event.class_uid == 4001:
         host = _first_by_type(entities, EntityType.HOST, "device.hostname")
@@ -44,6 +45,8 @@ def infer_relationships(event: OCSFEvent, entities: list[Entity]) -> list[Relati
             add("USED_IP", host, ip_entity)
         for ip_entity in _by_type_and_field(entities, EntityType.IP, "dst_endpoint.ip"):
             add("CONNECTED_TO", host, ip_entity)
+        for cloud_resource in _by_type(entities, EntityType.CLOUD_RESOURCE):
+            add("ACCESSED_CLOUD_RESOURCE", host, cloud_resource)
 
     elif event.class_uid == 4003:
         host = _first_by_type(entities, EntityType.HOST, "device.hostname")
@@ -62,6 +65,24 @@ def infer_relationships(event: OCSFEvent, entities: list[Entity]) -> list[Relati
         add("RAN_AS", process, user)
         for file_hash in _by_type(entities, EntityType.FILE_HASH):
             add("HAS_HASH", process, file_hash)
+        for url in _by_type(entities, EntityType.URL):
+            add("PROCESS_ACCESSED_URL", process, url)
+        for cloud_resource in _by_type(entities, EntityType.CLOUD_RESOURCE):
+            add("ACCESSED_CLOUD_RESOURCE", process, cloud_resource)
+        _add_user_email_relationships(add, user, entities)
+
+    elif event.class_uid in {2001, 2002}:
+        host = _first_by_type(entities, EntityType.HOST, "device.hostname")
+        for cve in _by_type(entities, EntityType.CVE):
+            add("AFFECTED_BY_CVE", host, cve)
+        for cloud_resource in _by_type(entities, EntityType.CLOUD_RESOURCE):
+            add("ACCESSED_CLOUD_RESOURCE", host, cloud_resource)
+
+    if _by_type(entities, EntityType.EMAIL):
+        sender = _first_by_type(entities, EntityType.EMAIL, "email.from") or _first_by_type(entities, EntityType.EMAIL, "email.sender")
+        recipients = _by_type_and_field(entities, EntityType.EMAIL, "email.to") + _by_type_and_field(entities, EntityType.EMAIL, "email.recipients")
+        for recipient in recipients:
+            add("EMAIL_SENT_TO", sender, recipient)
 
     return _dedupe_candidates(candidates)
 
@@ -105,6 +126,13 @@ def _by_type_and_field(entities: Iterable[Entity], entity_type: EntityType, sour
 def _first_by_type(entities: Iterable[Entity], entity_type: EntityType, source_field: str) -> Entity | None:
     matches = _by_type_and_field(entities, entity_type, source_field)
     return matches[0] if matches else None
+
+
+def _add_user_email_relationships(add, user: Entity | None, entities: Iterable[Entity]) -> None:
+    if user is None:
+        return
+    for email in _by_type(entities, EntityType.EMAIL):
+        add("USER_HAS_EMAIL", user, email)
 
 
 def _dedupe_candidates(candidates: list[RelationshipCandidate]) -> list[RelationshipCandidate]:

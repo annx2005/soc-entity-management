@@ -12,7 +12,7 @@ from app.database.session import SessionLocal
 from app.enrichment.cache import RedisEnrichmentCache
 from app.enrichment.dependencies import close_enrichment_provider, make_enrichment_provider
 from app.enrichment.service import EnrichmentService
-from app.graph.kafka_service import process_ocsf_event_message
+from app.graph.kafka_service import process_ocsf_event_messages
 from app.graph.repository import GraphRepository, create_graph_driver
 from app.graph.service import GraphService
 from app.ingestion.kafka_messages import OCSFEventMessage
@@ -50,18 +50,27 @@ async def run_worker() -> None:
     await consumer.start()
     logger.info("Kafka graph worker started")
     try:
-        async for kafka_message in consumer:
-            try:
-                message = OCSFEventMessage.model_validate_json(kafka_message.value)
-            except ValidationError:
-                logger.exception("Invalid OCSF event envelope; committing offset after validation failure")
-                await consumer.commit()
+        while True:
+            batches = await consumer.getmany(
+                timeout_ms=int(settings.graph_batch_max_wait_seconds * 1000),
+                max_records=settings.graph_batch_size,
+            )
+            messages: list[OCSFEventMessage] = []
+            for partition_messages in batches.values():
+                for kafka_message in partition_messages:
+                    try:
+                        messages.append(OCSFEventMessage.model_validate_json(kafka_message.value))
+                    except ValidationError:
+                        logger.exception("Invalid OCSF event envelope; committing offset after validation failure")
+            if not messages:
+                if batches:
+                    await consumer.commit()
                 continue
 
             try:
-                await process_ocsf_event_message(message, graph)
+                await process_ocsf_event_messages(messages, graph)
             except Exception:
-                logger.exception("Failed to process OCSF event; offset was not committed")
+                logger.exception("Failed to process OCSF event batch; offsets were not committed")
                 raise
             await consumer.commit()
     finally:

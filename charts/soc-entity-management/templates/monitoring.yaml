@@ -224,25 +224,7 @@ metadata:
     app.kubernetes.io/component: grafana
 data:
   soc-entity-management.json: |
-    {
-      "editable": true,
-      "panels": [
-        {"id":1,"type":"timeseries","title":"Entity Count by Tenant and Type","gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"expr":"sum by (tenant_id, entity_type) (soc_entities_total)","legendFormat":"{{ "{{tenant_id}}" }} / {{ "{{entity_type}}" }}","refId":"A"}],"datasource":{"type":"prometheus","uid":"prometheus"}},
-        {"id":2,"type":"timeseries","title":"Entity Upsert Rate","gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"sum by (tenant_id, entity_type, status) (rate(soc_graph_entities_upserted_total[5m]))","legendFormat":"{{ "{{tenant_id}}" }} / {{ "{{entity_type}}" }} / {{ "{{status}}" }}","refId":"A"}],"datasource":{"type":"prometheus","uid":"prometheus"}},
-        {"id":3,"type":"timeseries","title":"Enrichment Latency","gridPos":{"h":8,"w":12,"x":0,"y":8},"targets":[{"expr":"histogram_quantile(0.50, sum by (le, entity_type) (rate(soc_enrichment_lookup_duration_seconds_bucket[5m])))","legendFormat":"p50 {{ "{{entity_type}}" }}","refId":"A"},{"expr":"histogram_quantile(0.95, sum by (le, entity_type) (rate(soc_enrichment_lookup_duration_seconds_bucket[5m])))","legendFormat":"p95 {{ "{{entity_type}}" }}","refId":"B"}],"datasource":{"type":"prometheus","uid":"prometheus"}},
-        {"id":4,"type":"timeseries","title":"Enrichment Outcomes","gridPos":{"h":8,"w":12,"x":12,"y":8},"targets":[{"expr":"sum by (entity_type, cache_status, outcome) (rate(soc_enrichment_requests_total[5m]))","legendFormat":"{{ "{{entity_type}}" }} / {{ "{{cache_status}}" }} / {{ "{{outcome}}" }}","refId":"A"}],"datasource":{"type":"prometheus","uid":"prometheus"}},
-        {"id":5,"type":"timeseries","title":"Kafka Queue Depth","gridPos":{"h":8,"w":12,"x":0,"y":16},"targets":[{"expr":"sum by (consumergroup, topic) (kafka_consumergroup_lag)","legendFormat":"{{ "{{consumergroup}}" }} / {{ "{{topic}}" }}","refId":"A"}],"datasource":{"type":"prometheus","uid":"prometheus"}},
-        {"id":6,"type":"state-timeline","title":"Monitoring Targets","gridPos":{"h":8,"w":12,"x":12,"y":16},"targets":[{"expr":"up{job=~\"soc-.*|kafka-exporter\"}","legendFormat":"{{ "{{job}}" }}","range":true,"refId":"A"}],"datasource":{"type":"prometheus","uid":"prometheus"},"fieldConfig":{"defaults":{"color":{"mode":"thresholds"},"mappings":[{"type":"value","options":{"0":{"color":"red","index":0,"text":"Down"},"1":{"color":"green","index":1,"text":"Up"}}}],"thresholds":{"mode":"absolute","steps":[{"color":"red","value":null},{"color":"green","value":1}]}},"overrides":[]},"options":{"legend":{"displayMode":"hidden","placement":"bottom"},"mergeValues":true,"rowHeight":0.9,"showValue":"never","tooltip":{"mode":"single","sort":"none"}},"pluginVersion":"13.1.0"}
-      ],
-      "refresh": "10s",
-      "schemaVersion": 41,
-      "tags": ["soc", "entity-management"],
-      "time": {"from": "now-1h", "to": "now"},
-      "timezone": "browser",
-      "title": "SOC Entity Management",
-      "uid": "soc-entity-management",
-      "version": 1
-    }
+{{ .Files.Get "dashboards/soc-entity-management.json" | indent 4 }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

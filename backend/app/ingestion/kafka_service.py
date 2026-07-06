@@ -150,60 +150,91 @@ async def enqueue_jsonl_stream(
 
 
 async def process_raw_event_message(db: Session, message: RawEventMessage, publisher: Optional[EventPublisher] = None) -> None:
-    try:
-        record = json.loads(message.raw_line)
-        raw_tenant_id = _declared_raw_tenant_id(record)
-        event = _with_trusted_tenant(normalize_event(record), message.tenant_id, raw_tenant_id)
-        _record_tenant_mismatch_audit(db, message, event.event_id, raw_tenant_id)
-    except json.JSONDecodeError as exc:
-        await _record_processing_error(db, message, "json_parse_error", str(exc), publisher)
-        return
-    except UnsupportedEventError as exc:
-        await _record_processing_error(db, message, "unsupported_event", str(exc), publisher)
+    await process_raw_event_messages(db, [message], publisher)
+
+
+async def process_raw_event_messages(
+    db: Session,
+    messages: list[RawEventMessage],
+    publisher: Optional[EventPublisher] = None,
+) -> None:
+    if not messages:
         return
 
-    if _normalized_event_exists(db, message.batch_id, event.event_id):
-        # Count duplicate event ids as processed so the batch can complete,
-        # but do not persist or republish the same normalized event again.
-        _mark_batch_progress(db, message.batch_id, tenant_id=message.tenant_id, normalized_delta=1, error_delta=0)
-        db.commit()
-        return
+    settings = get_settings()
+    batch_progress: dict[tuple[int, str], dict[str, int]] = {}
+    seen_events: set[tuple[int, str]] = set()
+    downstream: list[OCSFEventMessage] = []
+    dead_letters: list[DeadLetterMessage] = []
 
-    db.add(
-        IngestionHistory(
-            batch_id=message.batch_id,
-            event_id=event.event_id,
-            event_type=event.event_type,
-            source=event.source_name,
-            normalized_event=event.model_dump(mode="json"),
+    def increment(message: RawEventMessage, *, normalized_delta: int = 0, error_delta: int = 0) -> None:
+        progress = batch_progress.setdefault((message.batch_id, message.tenant_id), {"normalized": 0, "errors": 0})
+        progress["normalized"] += normalized_delta
+        progress["errors"] += error_delta
+
+    for message in messages:
+        try:
+            record = json.loads(message.raw_line)
+            raw_tenant_id = _declared_raw_tenant_id(record)
+            event = _with_trusted_tenant(normalize_event(record), message.tenant_id, raw_tenant_id)
+            _record_tenant_mismatch_audit(db, message, event.event_id, raw_tenant_id)
+        except json.JSONDecodeError as exc:
+            dead_letters.append(_dead_letter_message(message, "json_parse_error", str(exc)))
+            db.add(_error_record_from_message(message, "json_parse_error", str(exc)))
+            increment(message, error_delta=1)
+            continue
+        except UnsupportedEventError as exc:
+            dead_letters.append(_dead_letter_message(message, "unsupported_event", str(exc)))
+            db.add(_error_record_from_message(message, "unsupported_event", str(exc)))
+            increment(message, error_delta=1)
+            continue
+
+        event_key = (message.batch_id, event.event_id)
+        if event_key in seen_events or _normalized_event_exists(db, message.batch_id, event.event_id):
+            increment(message, normalized_delta=1)
+            continue
+        seen_events.add(event_key)
+
+        db.add(
+            IngestionHistory(
+                batch_id=message.batch_id,
+                event_id=event.event_id,
+                event_type=event.event_type,
+                source=event.source_name,
+                normalized_event=event.model_dump(mode="json"),
+            )
         )
-    )
-    _mark_batch_progress(db, message.batch_id, tenant_id=message.tenant_id, normalized_delta=1, error_delta=0)
+        increment(message, normalized_delta=1)
+        downstream.append(_ocsf_event_message(message, event))
+
+    for (batch_id, tenant_id), progress in batch_progress.items():
+        _mark_batch_progress(
+            db,
+            batch_id,
+            tenant_id=tenant_id,
+            normalized_delta=progress["normalized"],
+            error_delta=progress["errors"],
+        )
 
     if publisher is not None:
-        ocsf_message = OCSFEventMessage(
-            source_message_id=message.message_id,
-            batch_id=message.batch_id,
-            event_id=event.event_id,
-            tenant_id=event.tenant_id,
-            class_uid=event.class_uid,
-            class_name=event.class_name,
-            activity_id=event.activity_id,
-            activity_name=event.activity_name,
-            ocsf_version=str(event.metadata.get("version", "1.2.0")),
-            ocsf_event=event.model_dump(mode="json"),
-        )
-        settings = get_settings()
-        await publisher.send(
-            settings.kafka_ocsf_events_topic,
-            ocsf_message,
-            key=f"{event.tenant_id}:{event.event_id}",
-            headers={
-                "schema_version": ocsf_message.schema_version,
-                "tenant_id": event.tenant_id,
-                "class_uid": str(event.class_uid),
-            },
-        )
+        for ocsf_message in downstream:
+            await publisher.send(
+                settings.kafka_ocsf_events_topic,
+                ocsf_message,
+                key=f"{ocsf_message.tenant_id}:{ocsf_message.event_id}",
+                headers={
+                    "schema_version": ocsf_message.schema_version,
+                    "tenant_id": ocsf_message.tenant_id,
+                    "class_uid": str(ocsf_message.class_uid),
+                },
+            )
+        for dlq_message in dead_letters:
+            await publisher.send(
+                settings.kafka_dead_letter_topic,
+                dlq_message,
+                key=str(dlq_message.batch_id),
+                headers={"schema_version": dlq_message.schema_version, "error_type": dlq_message.error_type},
+            )
 
     db.commit()
 
@@ -286,6 +317,43 @@ async def _record_processing_error(
         )
 
     db.commit()
+
+
+def _ocsf_event_message(message: RawEventMessage, event) -> OCSFEventMessage:
+    return OCSFEventMessage(
+        source_message_id=message.message_id,
+        batch_id=message.batch_id,
+        event_id=event.event_id,
+        tenant_id=event.tenant_id,
+        class_uid=event.class_uid,
+        class_name=event.class_name,
+        activity_id=event.activity_id,
+        activity_name=event.activity_name,
+        ocsf_version=str(event.metadata.get("version", "1.2.0")),
+        ocsf_event=event.model_dump(mode="json"),
+    )
+
+
+def _dead_letter_message(message: RawEventMessage, error_type: str, error_message: str) -> DeadLetterMessage:
+    return DeadLetterMessage(
+        source_message_id=message.message_id,
+        batch_id=message.batch_id,
+        source_name=message.source_name,
+        line_number=message.line_number,
+        error_type=error_type,
+        message=error_message,
+        raw_line=message.raw_line[:5000],
+    )
+
+
+def _error_record_from_message(message: RawEventMessage, error_type: str, error_message: str) -> ErrorRecord:
+    return ErrorRecord(
+        batch_id=message.batch_id,
+        line_number=message.line_number,
+        error_type=error_type,
+        message=error_message,
+        raw_line=message.raw_line[:5000],
+    )
 
 
 def _mark_batch_progress(db: Session, batch_id: int, tenant_id: str, normalized_delta: int, error_delta: int) -> None:

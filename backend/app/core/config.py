@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     enrichment_enabled: bool
     metrics_enabled: bool = True
     metrics_port: int = 9100
+    ingestion_db_batch_size: int = 1000
+    graph_batch_size: int = 500
+    graph_batch_max_wait_seconds: float = 2.0
 
     model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 

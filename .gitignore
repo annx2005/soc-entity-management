@@ -38,6 +38,7 @@ build/
 *.log
 *.tmp
 *.swp
+data/generated/
 
 # Terraform local state and variables
 **/.terraform/
