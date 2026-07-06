@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.dependencies import TenantContext, get_tenant_context
 from app.graph.dependencies import get_graph_service
-from app.graph.schemas import EntityResponse, EvidenceResponse, GraphResponse, RelationshipResponse
+from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphResponse, RelationshipResponse
 from app.graph.service import GraphService
 
 router = APIRouter(prefix="/api", tags=["graph"])
@@ -23,6 +23,16 @@ async def list_entities(
 ) -> list[EntityResponse]:
     tenant_id = _tenant_id_or_forbidden(context)
     return await graph.list_entities(tenant_id, entity_type=entity_type, value=value, limit=limit, offset=offset)
+
+
+@router.get("/entities/stats", response_model=list[EntityTypeCountResponse])
+async def get_entity_stats(
+    context: Annotated[TenantContext, Depends(get_tenant_context)],
+    graph: Annotated[GraphService, Depends(get_graph_service)],
+    value: Annotated[Optional[str], Query()] = None,
+) -> list[EntityTypeCountResponse]:
+    tenant_id = _tenant_id_or_forbidden(context)
+    return await graph.count_entities_by_type(tenant_id, value=value)
 
 
 @router.get("/entities/{entity_id}", response_model=EntityResponse)
@@ -60,6 +70,22 @@ async def get_entity_evidence(
     tenant_id = _tenant_id_or_forbidden(context)
     await _require_entity(graph, tenant_id, entity_id)
     return await graph.list_evidence(tenant_id, entity_id, limit=limit)
+
+
+@router.get("/entities/{entity_id}/relationships/{relationship_id}/evidence", response_model=list[EvidenceResponse])
+async def get_relationship_evidence(
+    entity_id: str,
+    relationship_id: str,
+    context: Annotated[TenantContext, Depends(get_tenant_context)],
+    graph: Annotated[GraphService, Depends(get_graph_service)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> list[EvidenceResponse]:
+    tenant_id = _tenant_id_or_forbidden(context)
+    await _require_entity(graph, tenant_id, entity_id)
+    evidence = await graph.list_relationship_evidence(tenant_id, entity_id, relationship_id, limit=limit)
+    if not evidence:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="relationship evidence not found")
+    return evidence
 
 
 @router.get("/graph/path", response_model=GraphResponse)

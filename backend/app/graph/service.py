@@ -7,7 +7,7 @@ from app.entities.schemas import Entity
 from app.enrichment.service import EnrichmentService
 from app.graph.inference import infer_relationships
 from app.graph.repository import GraphRepository
-from app.graph.schemas import EntityResponse, EvidenceResponse, GraphIngestResult, GraphResponse, RelationshipResponse
+from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphIngestResult, GraphResponse, RelationshipResponse
 from app.ocsf.schemas import OCSFEvent
 
 
@@ -54,10 +54,22 @@ class GraphRepositoryProtocol(Protocol):
     ) -> list[EntityResponse]:
         ...
 
+    async def count_entities_by_type(self, tenant_id: str, value: str | None = None) -> list[EntityTypeCountResponse]:
+        ...
+
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
         ...
 
     async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[EvidenceResponse]:
+        ...
+
+    async def list_relationship_evidence(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        relationship_id: str,
+        limit: int = 100,
+    ) -> list[EvidenceResponse]:
         ...
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
@@ -142,11 +154,23 @@ class GraphService:
     ) -> list[EntityResponse]:
         return await self._repository.list_entities(tenant_id, entity_type=entity_type, value=value, limit=limit, offset=offset)
 
+    async def count_entities_by_type(self, tenant_id: str, value: str | None = None) -> list[EntityTypeCountResponse]:
+        return await self._repository.count_entities_by_type(tenant_id, value=value)
+
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
         return await self._repository.list_relationships(tenant_id, entity_id, limit=limit)
 
     async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[EvidenceResponse]:
         return await self._repository.list_evidence(tenant_id, entity_id, limit=limit)
+
+    async def list_relationship_evidence(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        relationship_id: str,
+        limit: int = 100,
+    ) -> list[EvidenceResponse]:
+        return await self._repository.list_relationship_evidence(tenant_id, entity_id, relationship_id, limit=limit)
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
         return await self._repository.get_graph(tenant_id, entity_id, hops=hops, limit=limit)

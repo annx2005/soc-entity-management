@@ -1,6 +1,8 @@
 import type {
   AuditLog,
+  Evidence,
   Entity,
+  EntityTypeCount,
   EntityType,
   GraphResponse,
   IngestErrorRecord,
@@ -79,12 +81,27 @@ export async function listEntities(token: string, filters: EntityFilters): Promi
   return request<Entity[]>(`/api/entities?${params.toString()}`, undefined, token)
 }
 
+export async function getEntityTypeCounts(token: string, value?: string): Promise<EntityTypeCount[]> {
+  const params = new URLSearchParams()
+  if (value?.trim()) params.set('value', value.trim())
+  const suffix = params.size > 0 ? `?${params.toString()}` : ''
+  return request<EntityTypeCount[]>(`/api/entities/stats${suffix}`, undefined, token)
+}
+
 export async function getEntity(token: string, entityId: string): Promise<Entity> {
   return request<Entity>(`/api/entities/${encodeURIComponent(entityId)}`, undefined, token)
 }
 
 export async function listRelationships(token: string, entityId: string): Promise<Relationship[]> {
   return request<Relationship[]>(`/api/entities/${encodeURIComponent(entityId)}/relationships?limit=100`, undefined, token)
+}
+
+export async function listRelationshipEvidence(token: string, entityId: string, relationshipId: string): Promise<Evidence[]> {
+  return request<Evidence[]>(
+    `/api/entities/${encodeURIComponent(entityId)}/relationships/${encodeURIComponent(relationshipId)}/evidence?limit=20`,
+    undefined,
+    token,
+  )
 }
 
 export async function getGraph(token: string, entityId: string, hops = 2): Promise<GraphResponse> {
@@ -103,7 +120,7 @@ export async function findPath(token: string, sourceId: string, targetId: string
 
 export async function ingestFile(
   token: string,
-  input: { file?: File | null; filePath?: string; asyncMode: boolean },
+  input: { file?: File | null; filePath?: string },
 ): Promise<IngestFileResponse> {
   const form = new FormData()
   if (input.file) {
@@ -112,7 +129,7 @@ export async function ingestFile(
     form.append('file_path', input.filePath.trim())
   }
   return request<IngestFileResponse>(
-    input.asyncMode ? '/api/events/ingest-file-async' : '/api/events/ingest-file',
+    '/api/events/ingest-file-async',
     {
       method: 'POST',
       body: form,

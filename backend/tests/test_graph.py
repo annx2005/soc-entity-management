@@ -15,7 +15,7 @@ from app.graph.constants import label_for_entity_type, validate_relationship_typ
 from app.graph.dependencies import get_graph_service
 from app.graph.inference import infer_relationships
 from app.graph.kafka_service import process_ocsf_event_message
-from app.graph.schemas import EntityResponse, GraphResponse
+from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphResponse, RelationshipResponse
 from app.graph.service import GraphService
 from app.ingestion.kafka_messages import OCSFEventMessage
 from app.normalization.normalizer import normalize_event
@@ -281,14 +281,40 @@ def test_entities_api_list_omits_entities_from_other_tenants() -> None:
     assert [item["id"] for item in response.json()] == ["entity-a"]
 
 
+def test_entity_stats_api_returns_tenant_scoped_counts() -> None:
+    client = graph_test_client(
+        FakeApiGraphService(
+            entities={
+                TENANT_ID: {
+                    "entity-a": EntityResponse(id="entity-a", tenant_id=TENANT_ID, entity_type="ip", value="1.2.3.4"),
+                    "entity-b": EntityResponse(id="entity-b", tenant_id=TENANT_ID, entity_type="host", value="workstation-a"),
+                },
+                OTHER_TENANT_ID: {
+                    "entity-c": EntityResponse(id="entity-c", tenant_id=OTHER_TENANT_ID, entity_type="domain", value="example.org")
+                },
+            }
+        )
+    )
+
+    response = client.get("/api/entities/stats", headers={"Authorization": "Bearer test"})
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"entity_type": "host", "count": 1},
+        {"entity_type": "ip", "count": 1},
+    ]
+
+
 @pytest.mark.parametrize(
     ("path", "expected_status"),
     [
         ("/api/entities/entity-a/relationships", 200),
         ("/api/entities/entity-a/evidence", 200),
+        ("/api/entities/entity-a/relationships/rel-a/evidence", 200),
         ("/api/graph/entity-a", 200),
         ("/api/entities/entity-b/relationships", 404),
         ("/api/entities/entity-b/evidence", 404),
+        ("/api/entities/entity-b/relationships/rel-b/evidence", 404),
         ("/api/graph/entity-b", 404),
     ],
 )
@@ -530,18 +556,56 @@ class FakeApiGraphService:
         self.entities = entities or {}
         self.graph_calls = []
         self.path_calls = []
+        self.relationships = {
+            TENANT_ID: {
+                "entity-a": [
+                    RelationshipResponse(
+                        id="rel-a",
+                        tenant_id=TENANT_ID,
+                        relationship_type="CONNECTED_TO",
+                        from_id="entity-a",
+                        to_id="entity-neighbor",
+                        count=1,
+                    )
+                ]
+            }
+        }
+        self.relationship_evidence = {
+            TENANT_ID: {
+                ("entity-a", "rel-a"): [
+                    EvidenceResponse(
+                        event_id="evt-relationship-1",
+                        class_name="Network Activity",
+                        activity_name="Connect",
+                        source_name="wazuh_sysmon",
+                        relationship_id="rel-a",
+                    )
+                ]
+            }
+        }
 
     async def list_entities(self, tenant_id: str, entity_type: str | None = None, value: str | None = None, limit: int = 100, offset: int = 0):
         return list(self.entities.get(tenant_id, {}).values())[offset : offset + limit]
+
+    async def count_entities_by_type(self, tenant_id: str, value: str | None = None):
+        counts: dict[str, int] = defaultdict(int)
+        for entity in self.entities.get(tenant_id, {}).values():
+            if value and value not in entity.value:
+                continue
+            counts[entity.entity_type] += 1
+        return [EntityTypeCountResponse(entity_type=entity_type, count=count) for entity_type, count in sorted(counts.items())]
 
     async def get_entity(self, tenant_id: str, entity_id: str):
         return self.entities.get(tenant_id, {}).get(entity_id)
 
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100):
-        return []
+        return self.relationships.get(tenant_id, {}).get(entity_id, [])[:limit]
 
     async def list_evidence(self, tenant_id: str, entity_id: str, limit: int = 100):
         return []
+
+    async def list_relationship_evidence(self, tenant_id: str, entity_id: str, relationship_id: str, limit: int = 100):
+        return self.relationship_evidence.get(tenant_id, {}).get((entity_id, relationship_id), [])[:limit]
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200):
         self.graph_calls.append({"tenant_id": tenant_id, "entity_id": entity_id, "hops": hops, "limit": limit})

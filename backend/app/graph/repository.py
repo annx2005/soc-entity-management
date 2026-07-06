@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.entities.schemas import Entity, EntityType
 from app.graph.constants import label_for_entity_type, validate_relationship_type
 from app.graph.ids import graph_event_id, observation_id, relationship_fact_id
-from app.graph.schemas import EntityResponse, EvidenceResponse, GraphEdge, GraphNode, GraphResponse, RelationshipCandidate, RelationshipResponse
+from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphEdge, GraphNode, GraphResponse, RelationshipCandidate, RelationshipResponse
 from app.ocsf.schemas import OCSFEvent
 
 
@@ -28,6 +28,8 @@ class GraphRepository:
             "CREATE INDEX entity_tenant_value_idx IF NOT EXISTS FOR (n:Entity) ON (n.tenant_id, n.value)",
             "CREATE INDEX event_tenant_time_idx IF NOT EXISTS FOR (n:Event) ON (n.tenant_id, n.time)",
             "CREATE INDEX relationship_fact_tenant_type_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.relationship_type)",
+            "CREATE INDEX relationship_fact_tenant_from_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.from_id)",
+            "CREATE INDEX relationship_fact_tenant_to_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.to_id)",
         ]
         async with self._driver.session() as session:
             for statement in statements:
@@ -260,10 +262,31 @@ class GraphRepository:
             result = await session.run(query, **params)
             return [_entity_response(record["entity"]) async for record in result]
 
+    async def count_entities_by_type(self, tenant_id: str, value: str | None = None) -> list[EntityTypeCountResponse]:
+        clauses = ["entity.tenant_id = $tenant_id"]
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if value:
+            clauses.append("entity.value CONTAINS $value")
+            params["value"] = value
+        query = f"""
+        MATCH (entity:Entity)
+        WHERE {" AND ".join(clauses)}
+        RETURN entity.entity_type AS entity_type, count(entity) AS count
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, **params)
+            return [
+                EntityTypeCountResponse(
+                    entity_type=str(record["entity_type"]),
+                    count=int(record["count"] or 0),
+                )
+                async for record in result
+            ]
+
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
         query = """
-        MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id})-[rel]-(other:Entity {tenant_id: $tenant_id})
-        MATCH (fact:RelationshipFact {id: rel.fact_id, tenant_id: $tenant_id})
+        MATCH (fact:RelationshipFact {tenant_id: $tenant_id})
+        WHERE fact.from_id = $entity_id OR fact.to_id = $entity_id
         RETURN fact
         ORDER BY fact.last_seen DESC
         LIMIT $limit
@@ -283,6 +306,32 @@ class GraphRepository:
         async with self._driver.session() as session:
             result = await session.run(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
             return [_evidence_response(record["event"], record["obs"]) async for record in result]
+
+    async def list_relationship_evidence(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        relationship_id: str,
+        limit: int = 100,
+    ) -> list[EvidenceResponse]:
+        query = """
+        MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id})
+        MATCH (fact:RelationshipFact {id: $relationship_id, tenant_id: $tenant_id})
+        WHERE fact.from_id = entity.id OR fact.to_id = entity.id
+        MATCH (event:Event {tenant_id: $tenant_id})-[:EVIDENCES]->(fact)
+        RETURN event, fact
+        ORDER BY event.time DESC
+        LIMIT $limit
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                query,
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                relationship_id=relationship_id,
+                limit=limit,
+            )
+            return [_relationship_evidence_response(record["event"], record["fact"]) async for record in result]
 
     async def get_graph(self, tenant_id: str, entity_id: str, hops: int = 1, limit: int = 200) -> GraphResponse:
         if hops < 1 or hops > 4:
@@ -428,6 +477,21 @@ def _evidence_response(event_node: Node, observation_node: Node) -> EvidenceResp
         source_name=event.get("source_name"),
         field_path=obs.get("field_path"),
         value=obs.get("value"),
+    )
+
+
+def _relationship_evidence_response(event_node: Node, relationship_fact_node: Node) -> EvidenceResponse:
+    event = dict(event_node)
+    relationship_fact = dict(relationship_fact_node)
+    return EvidenceResponse(
+        event_id=str(event.get("event_id")),
+        time=_temporal_to_str(event.get("time")),
+        class_uid=event.get("class_uid"),
+        class_name=event.get("class_name"),
+        activity_id=event.get("activity_id"),
+        activity_name=event.get("activity_name"),
+        source_name=event.get("source_name"),
+        relationship_id=str(relationship_fact.get("id")),
     )
 
 
