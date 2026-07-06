@@ -1,0 +1,146 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-gke:
+    name: Deploy to GKE
+    runs-on: ubuntu-latest
+
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
+      GKE_LOCATION: ${{ vars.GKE_LOCATION }}
+      GAR_LOCATION: ${{ vars.GAR_LOCATION }}
+      GAR_REPOSITORY: ${{ vars.GAR_REPOSITORY }}
+      WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+      WIF_SERVICE_ACCOUNT: ${{ vars.WIF_SERVICE_ACCOUNT }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      INGRESS_STATIC_IP_NAME: ${{ vars.INGRESS_STATIC_IP_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check deployment variables
+        run: |
+          test -n "$GCP_PROJECT_ID"
+          test -n "$GKE_CLUSTER"
+          test -n "$GKE_LOCATION"
+          test -n "$GAR_LOCATION"
+          test -n "$GAR_REPOSITORY"
+          test -n "$WIF_PROVIDER"
+          test -n "$WIF_SERVICE_ACCOUNT"
+          test -n "$K8S_NAMESPACE"
+          test -n "$INGRESS_STATIC_IP_NAME"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GAR_LOCATION}-docker.pkg.dev" --quiet
+
+      - name: Build and push images
+        env:
+          IMAGE_REGISTRY: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}
+        run: |
+          docker build -f backend/Dockerfile -t "$IMAGE_REGISTRY/backend:${GITHUB_SHA}" .
+          docker build -f frontend/Dockerfile -t "$IMAGE_REGISTRY/frontend:${GITHUB_SHA}" .
+          docker push "$IMAGE_REGISTRY/backend:${GITHUB_SHA}"
+          docker push "$IMAGE_REGISTRY/frontend:${GITHUB_SHA}"
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_LOCATION }}
+
+      - name: Prepare StatefulSet immutable migration
+        run: |
+          kubectl create namespace "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+
+          migrate_statefulset() {
+            name="$1"
+            desired_service="$2"
+            pod_name="${name}-0"
+            current_service="$(kubectl get statefulset "$name" --namespace "$K8S_NAMESPACE" -o jsonpath='{.spec.serviceName}' 2>/dev/null || true)"
+
+            if [ -n "$current_service" ] && [ "$current_service" != "$desired_service" ]; then
+              echo "Migrating $name serviceName from $current_service to $desired_service"
+              kubectl delete statefulset "$name" --namespace "$K8S_NAMESPACE" --cascade=orphan
+              kubectl delete pod "$pod_name" --namespace "$K8S_NAMESPACE" --ignore-not-found=true --wait=false
+            fi
+          }
+
+          migrate_statefulset "soc-entity-management-postgresql" "soc-entity-management-postgresql-headless"
+          migrate_statefulset "soc-entity-management-kafka" "soc-entity-management-kafka-headless"
+          migrate_statefulset "soc-entity-management-neo4j" "soc-entity-management-neo4j-headless"
+
+      - name: Deploy Helm release
+        env:
+          IMAGE_REGISTRY: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPOSITORY }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+          ENRICHMENT_IPINFO_TOKEN: ${{ secrets.ENRICHMENT_IPINFO_TOKEN }}
+          ENRICHMENT_MALWARE_BAZAAR_AUTH_KEY: ${{ secrets.ENRICHMENT_MALWARE_BAZAAR_AUTH_KEY }}
+        run: |
+          test -n "$JWT_SECRET_KEY"
+          test -n "$POSTGRES_PASSWORD"
+          test -n "$NEO4J_PASSWORD"
+
+          helm upgrade --install soc-entity-management charts/soc-entity-management \
+            --namespace "$K8S_NAMESPACE" \
+            --create-namespace \
+            --wait \
+            --timeout 25m \
+            -f charts/soc-entity-management/values-gke.yaml \
+            --set-string global.imageRegistry="$IMAGE_REGISTRY" \
+            --set-string global.imageTag="$GITHUB_SHA" \
+            --set-string ingress.staticIpName="$INGRESS_STATIC_IP_NAME" \
+            --set-string secrets.jwtSecretKey="$JWT_SECRET_KEY" \
+            --set-string secrets.postgresPassword="$POSTGRES_PASSWORD" \
+            --set-string secrets.neo4jPassword="$NEO4J_PASSWORD" \
+            --set-string secrets.enrichmentIpinfoToken="$ENRICHMENT_IPINFO_TOKEN" \
+            --set-string secrets.enrichmentMalwareBazaarAuthKey="$ENRICHMENT_MALWARE_BAZAAR_AUTH_KEY"
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/soc-entity-management-backend --namespace "$K8S_NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/soc-entity-management-frontend --namespace "$K8S_NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/soc-entity-management-kafka-ingestion-worker --namespace "$K8S_NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/soc-entity-management-kafka-graph-worker --namespace "$K8S_NAMESPACE" --timeout=5m
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods,svc,pvc,ingress,jobs -n "$K8S_NAMESPACE" -o wide || true
+          kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -n 100 || true
+          kubectl describe statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" || true
+          kubectl describe statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" || true
+          kubectl describe statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" || true
+          kubectl logs statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" --tail=200 || true
+          kubectl logs statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" --tail=200 || true
+          kubectl logs statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" --tail=200 || true
