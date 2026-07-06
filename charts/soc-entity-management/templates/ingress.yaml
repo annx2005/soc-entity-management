@@ -6,11 +6,11 @@ metadata:
   labels:
     {{- include "soc.labels" . | nindent 4 }}
   annotations:
-    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
     {{- with .Values.ingress.staticIpName }}
     kubernetes.io/ingress.global-static-ip-name: {{ . | quote }}
     {{- end }}
 spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
   rules:
     - http:
         paths:

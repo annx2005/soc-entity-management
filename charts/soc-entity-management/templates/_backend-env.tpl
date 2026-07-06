@@ -20,7 +20,10 @@
       name: {{ include "soc.secretName" . }}
       key: POSTGRES_PASSWORD
 - name: DATABASE_URL
-  value: "postgresql+psycopg://{{ .Values.postgresql.auth.username }}:$(POSTGRES_PASSWORD)@{{ include "soc.postgresqlName" . }}:5432/{{ .Values.postgresql.auth.database }}"
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "soc.secretName" . }}
+      key: DATABASE_URL
 - name: REDIS_URL
   value: "redis://{{ include "soc.redisName" . }}:6379/0"
 - name: NEO4J_URI

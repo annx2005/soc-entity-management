@@ -238,7 +238,7 @@ jobs:
             --namespace "$K8S_NAMESPACE" \
             --create-namespace \
             --wait \
-            --timeout 15m \
+            --timeout 25m \
             -f charts/soc-entity-management/values-gke.yaml \
             --set-string global.imageRegistry="$IMAGE_REGISTRY" \
             --set-string global.imageTag="$GITHUB_SHA" \
@@ -255,3 +255,15 @@ jobs:
           kubectl rollout status deployment/soc-entity-management-frontend --namespace "$K8S_NAMESPACE" --timeout=5m
           kubectl rollout status deployment/soc-entity-management-kafka-ingestion-worker --namespace "$K8S_NAMESPACE" --timeout=5m
           kubectl rollout status deployment/soc-entity-management-kafka-graph-worker --namespace "$K8S_NAMESPACE" --timeout=5m
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods,svc,pvc,ingress,jobs -n "$K8S_NAMESPACE" -o wide || true
+          kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -n 100 || true
+          kubectl describe statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" || true
+          kubectl describe statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" || true
+          kubectl describe statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" || true
+          kubectl logs statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" --tail=200 || true
+          kubectl logs statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" --tail=200 || true
+          kubectl logs statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" --tail=200 || true

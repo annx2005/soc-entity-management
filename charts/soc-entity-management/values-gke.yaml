@@ -3,6 +3,14 @@ global:
   imageTag: latest
   imagePullPolicy: IfNotPresent
 
+backend:
+  service:
+    type: NodePort
+
+frontend:
+  service:
+    type: NodePort
+
 ingress:
   enabled: true
   className: gce
