@@ -31,6 +31,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "soc.secretDataValue" -}}
+{{- $value := .value | default "" | toString -}}
+{{- if ne $value "" -}}
+{{- $value | b64enc | quote -}}
+{{- else -}}
+{{- index (.existingData | default dict) .key | default "" | quote -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "soc.backendName" -}}
 {{- include "soc.fullname" . }}-backend
 {{- end -}}

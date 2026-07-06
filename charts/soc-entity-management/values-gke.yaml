@@ -27,3 +27,6 @@ kafka:
 neo4j:
   storage:
     size: 20Gi
+
+enrichment:
+  providerMode: ipinfo_malwarebazaar
