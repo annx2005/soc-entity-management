@@ -10,7 +10,7 @@ from app.audit.service import AuditLogger
 from app.database.session import init_db
 from app.database.session import SessionLocal
 from app.enrichment.cache import RedisEnrichmentCache
-from app.enrichment.providers import OfflineJsonEnrichmentProvider
+from app.enrichment.dependencies import close_enrichment_provider, make_enrichment_provider
 from app.enrichment.service import EnrichmentService
 from app.graph.kafka_service import process_ocsf_event_message
 from app.graph.repository import GraphRepository, create_graph_driver
@@ -36,10 +36,7 @@ async def run_worker() -> None:
     )
     driver = create_graph_driver()
     cache = RedisEnrichmentCache(settings.redis_url)
-    provider = OfflineJsonEnrichmentProvider(
-        settings.enrichment_ip_source_path,
-        settings.enrichment_file_hash_source_path,
-    )
+    provider = make_enrichment_provider()
     enrichment = EnrichmentService(
         provider,
         cache=cache,
@@ -66,6 +63,7 @@ async def run_worker() -> None:
                 raise
             await consumer.commit()
     finally:
+        await close_enrichment_provider(provider)
         await cache.close()
         await driver.close()
         await consumer.stop()

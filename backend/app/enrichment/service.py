@@ -51,7 +51,7 @@ class EnrichmentService:
             return _with_enrichment(entity, cached.model_copy(update={"cache_status": "hit"}))
 
         try:
-            result = self._provider.lookup(entity.type, entity.value)
+            result = await self._provider.lookup(entity.type, entity.value)
         except Exception as exc:
             return _with_enrichment_error(entity, str(exc))
 

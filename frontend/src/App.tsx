@@ -868,7 +868,9 @@ function EntityDetail({
   onGraphHopsChange: (hops: number) => void;
 }) {
   const enrichment = entity.properties.enrichment;
-  const enrichmentRows = isRecord(enrichment) ? Object.entries(enrichment) : [];
+  const enrichmentRows = isRecord(enrichment)
+    ? buildEnrichmentRows(entity.entity_type, enrichment)
+    : [];
   const properties = Object.entries(entity.properties).filter(
     ([key]) => key !== "enrichment",
   );
@@ -1311,7 +1313,7 @@ function KeyValueList({ rows }: { rows: [string, unknown][] }) {
     <dl className="kv-list">
       {rows.map(([key, value]) => (
         <div key={key}>
-          <dt>{key.replaceAll("_", " ")}</dt>
+          <dt>{formatFieldLabel(key)}</dt>
           <dd>{formatValue(value)}</dd>
         </div>
       ))}
@@ -1346,7 +1348,98 @@ function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
+  if (Array.isArray(value))
+    return value.length > 0 ? value.map((item) => formatValue(item)).join(", ") : "-";
   return JSON.stringify(value);
+}
+
+function buildEnrichmentRows(
+  entityType: EntityType | string,
+  enrichment: Record<string, unknown>,
+): [string, unknown][] {
+  const prioritiesByType: Record<string, string[]> = {
+    ip: [
+      "country",
+      "country_code",
+      "continent",
+      "continent_code",
+      "asn",
+      "as_name",
+      "as_domain",
+      "reputation",
+      "classification",
+      "noise",
+      "riot",
+      "last_seen",
+      "source",
+      "cache_status",
+    ],
+    file_hash: [
+      "malware_family",
+      "signature",
+      "file_name",
+      "file_type",
+      "file_type_mime",
+      "file_format",
+      "tags",
+      "delivery_method",
+      "reporter",
+      "origin_country",
+      "first_seen",
+      "last_seen",
+      "source",
+      "cache_status",
+      "sha256_hash",
+      "sha1_hash",
+      "md5_hash",
+    ],
+  };
+
+  const priority = prioritiesByType[entityType] ?? ["source", "cache_status"];
+  const prioritySet = new Set(priority);
+  const orderedKeys = [
+    ...priority.filter((key) => hasDisplayValue(enrichment[key])),
+    ...Object.keys(enrichment)
+      .filter((key) => !prioritySet.has(key) && hasDisplayValue(enrichment[key]))
+      .sort((left, right) => formatFieldLabel(left).localeCompare(formatFieldLabel(right))),
+  ];
+
+  return orderedKeys.map((key) => [key, enrichment[key]]);
+}
+
+function formatFieldLabel(key: string): string {
+  const labels: Record<string, string> = {
+    as_domain: "AS domain",
+    as_name: "AS name",
+    asn: "ASN",
+    cache_status: "Cache status",
+    continent_code: "Continent code",
+    country_code: "Country code",
+    file_format: "File format",
+    file_name: "File name",
+    file_size: "File size",
+    file_type: "File type",
+    file_type_mime: "MIME type",
+    first_seen: "First seen",
+    last_seen: "Last seen",
+    malware_family: "Malware family",
+    md5_hash: "MD5",
+    origin_country: "Origin country",
+    sha1_hash: "SHA1",
+    sha256_hash: "SHA256",
+    source_name: "Source name",
+    source_field: "Source field",
+    ssdeep: "SSDEEP",
+    tlsh: "TLSH",
+  };
+  return labels[key] ?? key.replaceAll("_", " ");
+}
+
+function hasDisplayValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === "") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return !isRecord(value) || Object.keys(value).length > 0;
+  return true;
 }
 
 function formatAction(action: string): string {

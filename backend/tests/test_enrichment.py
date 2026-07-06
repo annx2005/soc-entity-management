@@ -3,8 +3,15 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
+
 from app.entities.schemas import Entity, EntityType
-from app.enrichment.providers import OfflineJsonEnrichmentProvider
+from app.enrichment.providers import (
+    CompositeEnrichmentProvider,
+    IpinfoLiteEnrichmentProvider,
+    MalwareBazaarEnrichmentProvider,
+    OfflineJsonEnrichmentProvider,
+)
 from app.enrichment.schemas import EnrichmentResult
 from app.enrichment.service import EnrichmentService, enrichment_cache_key
 
@@ -16,8 +23,8 @@ def test_offline_provider_ip_hit_and_miss(tmp_path) -> None:
     hash_path.write_text("{}", encoding="utf-8")
     provider = OfflineJsonEnrichmentProvider(str(ip_path), str(hash_path))
 
-    hit = provider.lookup(EntityType.IP, "8.8.8.8")
-    miss = provider.lookup(EntityType.IP, "1.1.1.1")
+    hit = asyncio.run(provider.lookup(EntityType.IP, "8.8.8.8"))
+    miss = asyncio.run(provider.lookup(EntityType.IP, "1.1.1.1"))
 
     assert hit is not None
     assert hit.data["country"] == "US"
@@ -35,10 +42,96 @@ def test_offline_provider_file_hash_lookup_is_case_insensitive(tmp_path) -> None
     )
     provider = OfflineJsonEnrichmentProvider(str(ip_path), str(hash_path))
 
-    result = provider.lookup(EntityType.FILE_HASH, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+    result = asyncio.run(provider.lookup(EntityType.FILE_HASH, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
 
     assert result is not None
     assert result.data["reputation"] == "malicious"
+
+
+def test_ipinfo_lite_provider_maps_country_and_asn() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/lite/8.8.8.8"
+        assert request.url.params["token"] == "ipinfo-token"
+        return httpx.Response(
+            200,
+            json={
+                "ip": "8.8.8.8",
+                "country": "United States",
+                "country_code": "US",
+                "asn": "AS15169",
+                "as_name": "Google LLC",
+                "as_domain": "google.com",
+                "continent": "North America",
+                "continent_code": "NA",
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = IpinfoLiteEnrichmentProvider(token="ipinfo-token", client=client)
+
+    try:
+        result = asyncio.run(provider.lookup(EntityType.IP, "8.8.8.8"))
+    finally:
+        asyncio.run(client.aclose())
+
+    assert result is not None
+    assert result.source == "ipinfo-lite"
+    assert result.data["country"] == "United States"
+    assert result.data["asn"] == "AS15169"
+
+
+def test_malware_bazaar_provider_maps_signature_to_malware_family() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode("utf-8")
+        assert request.method == "POST"
+        assert request.headers["Auth-Key"] == "mb-key"
+        assert "query=get_info" in body
+        assert "hash=deadbeef" in body
+        return httpx.Response(
+            200,
+            json={
+                "query_status": "ok",
+                "data": [
+                    {
+                        "sha256_hash": "deadbeef",
+                        "file_name": "sample.exe",
+                        "file_type": "exe",
+                        "signature": "Remcos",
+                        "tags": ["rat"],
+                    }
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = MalwareBazaarEnrichmentProvider(auth_key="mb-key", client=client)
+
+    try:
+        result = asyncio.run(provider.lookup(EntityType.FILE_HASH, "deadbeef"))
+    finally:
+        asyncio.run(client.aclose())
+
+    assert result is not None
+    assert result.source == "malwarebazaar"
+    assert result.data["malware_family"] == "Remcos"
+    assert result.data["file_name"] == "sample.exe"
+
+
+def test_composite_provider_delegates_to_matching_provider() -> None:
+    composite = CompositeEnrichmentProvider(
+        [
+            FakeProvider({(EntityType.IP, "8.8.8.8"): {"country": "US", "provider": "ipinfo-lite"}}),
+            FakeProvider({(EntityType.FILE_HASH, "deadbeef"): {"malware_family": "Remcos", "provider": "malwarebazaar"}}),
+        ]
+    )
+
+    ip_result = asyncio.run(composite.lookup(EntityType.IP, "8.8.8.8"))
+    hash_result = asyncio.run(composite.lookup(EntityType.FILE_HASH, "deadbeef"))
+
+    assert ip_result is not None
+    assert ip_result.source == "ipinfo-lite"
+    assert hash_result is not None
+    assert hash_result.source == "malwarebazaar"
 
 
 def test_enrichment_service_cache_miss_calls_provider_and_sets_ttl() -> None:
@@ -130,7 +223,7 @@ class FakeProvider:
         self.results = results
         self.calls: list[tuple[EntityType, str]] = []
 
-    def lookup(self, entity_type: EntityType, value: str) -> EnrichmentResult | None:
+    async def lookup(self, entity_type: EntityType, value: str) -> EnrichmentResult | None:
         self.calls.append((entity_type, value))
         data = self.results.get((entity_type, value))
         if data is None:
@@ -158,7 +251,7 @@ class FakeCache:
 
 
 class RaisingProvider:
-    def lookup(self, entity_type: EntityType, value: str) -> EnrichmentResult | None:
+    async def lookup(self, entity_type: EntityType, value: str) -> EnrichmentResult | None:
         raise RuntimeError("provider failed")
 
 
