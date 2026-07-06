@@ -138,9 +138,12 @@ jobs:
         run: |
           kubectl get pods,svc,pvc,ingress,jobs -n "$K8S_NAMESPACE" -o wide || true
           kubectl get events -n "$K8S_NAMESPACE" --sort-by=.lastTimestamp | tail -n 100 || true
+          kubectl describe pod/soc-entity-management-postgresql-0 -n "$K8S_NAMESPACE" || true
+          kubectl describe pod/soc-entity-management-kafka-0 -n "$K8S_NAMESPACE" || true
+          kubectl describe pod/soc-entity-management-neo4j-0 -n "$K8S_NAMESPACE" || true
           kubectl describe statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" || true
           kubectl describe statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" || true
           kubectl describe statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" || true
-          kubectl logs statefulset/soc-entity-management-postgresql -n "$K8S_NAMESPACE" --tail=200 || true
-          kubectl logs statefulset/soc-entity-management-kafka -n "$K8S_NAMESPACE" --tail=200 || true
-          kubectl logs statefulset/soc-entity-management-neo4j -n "$K8S_NAMESPACE" --tail=200 || true
+          kubectl logs pod/soc-entity-management-postgresql-0 -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
+          kubectl logs pod/soc-entity-management-kafka-0 -n "$K8S_NAMESPACE" --all-containers --tail=200 || true
+          kubectl logs pod/soc-entity-management-neo4j-0 -n "$K8S_NAMESPACE" --all-containers --tail=200 || true

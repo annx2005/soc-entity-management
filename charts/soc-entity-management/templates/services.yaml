@@ -41,6 +41,7 @@ metadata:
     app.kubernetes.io/component: postgresql
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   ports:
     - name: postgresql
       port: 5432
@@ -75,6 +76,7 @@ metadata:
     app.kubernetes.io/component: kafka
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   ports:
     - name: kafka
       port: 9092
@@ -92,6 +94,7 @@ metadata:
     app.kubernetes.io/component: neo4j
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   ports:
     - name: http
       port: 7474
