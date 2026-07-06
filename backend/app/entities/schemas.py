@@ -13,6 +13,10 @@ class EntityType(str, enum.Enum):
     DOMAIN = "domain"
     FILE_HASH = "file_hash"
     PROCESS = "process"
+    URL = "url"
+    EMAIL = "email"
+    CVE = "cve"
+    CLOUD_RESOURCE = "cloud_resource"
 
 
 class Entity(BaseModel):

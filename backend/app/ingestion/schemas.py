@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -34,5 +35,6 @@ class NormalizedEventResponse(BaseModel):
     event_type: str
     source: str
     normalized_event: dict[str, Any]
+    created_at: Optional[datetime]
 
     model_config = {"from_attributes": True}

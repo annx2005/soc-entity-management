@@ -10,6 +10,10 @@ LABEL_BY_ENTITY_TYPE: dict[EntityType, str] = {
     EntityType.DOMAIN: "Domain",
     EntityType.FILE_HASH: "FileHash",
     EntityType.PROCESS: "Process",
+    EntityType.URL: "URL",
+    EntityType.EMAIL: "Email",
+    EntityType.CVE: "CVE",
+    EntityType.CLOUD_RESOURCE: "CloudResource",
 }
 
 ALLOWED_RELATIONSHIP_TYPES = {

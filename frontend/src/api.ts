@@ -1,8 +1,9 @@
 import type {
   AuditLog,
+  Evidence,
   Entity,
-  EntityType,
   GraphFilters,
+  EntityTypeCount,
   GraphResponse,
   IngestErrorRecord,
   IngestFileResponse,
@@ -12,7 +13,7 @@ import type {
   TenantContext,
 } from './types'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const TOKEN_KEY = 'soc_entity_access_token'
 
 type LoginPayload = {
@@ -29,7 +30,7 @@ type RegisterPayload = {
 }
 
 type EntityFilters = {
-  entityType?: EntityType | ''
+  entityType?: string
   value?: string
   limit?: number
   offset?: number
@@ -80,12 +81,27 @@ export async function listEntities(token: string, filters: EntityFilters): Promi
   return request<Entity[]>(`/api/entities?${params.toString()}`, undefined, token)
 }
 
+export async function getEntityTypeCounts(token: string, value?: string): Promise<EntityTypeCount[]> {
+  const params = new URLSearchParams()
+  if (value?.trim()) params.set('value', value.trim())
+  const suffix = params.size > 0 ? `?${params.toString()}` : ''
+  return request<EntityTypeCount[]>(`/api/entities/stats${suffix}`, undefined, token)
+}
+
 export async function getEntity(token: string, entityId: string): Promise<Entity> {
   return request<Entity>(`/api/entities/${encodeURIComponent(entityId)}`, undefined, token)
 }
 
 export async function listRelationships(token: string, entityId: string): Promise<Relationship[]> {
   return request<Relationship[]>(`/api/entities/${encodeURIComponent(entityId)}/relationships?limit=100`, undefined, token)
+}
+
+export async function listRelationshipEvidence(token: string, entityId: string, relationshipId: string): Promise<Evidence[]> {
+  return request<Evidence[]>(
+    `/api/entities/${encodeURIComponent(entityId)}/relationships/${encodeURIComponent(relationshipId)}/evidence?limit=20`,
+    undefined,
+    token,
+  )
 }
 
 export async function getGraph(
@@ -114,7 +130,7 @@ export async function findPath(token: string, sourceId: string, targetId: string
 
 export async function ingestFile(
   token: string,
-  input: { file?: File | null; filePath?: string; asyncMode: boolean },
+  input: { file?: File | null; filePath?: string },
 ): Promise<IngestFileResponse> {
   const form = new FormData()
   if (input.file) {
@@ -123,7 +139,7 @@ export async function ingestFile(
     form.append('file_path', input.filePath.trim())
   }
   return request<IngestFileResponse>(
-    input.asyncMode ? '/api/events/ingest-file-async' : '/api/events/ingest-file',
+    '/api/events/ingest-file-async',
     {
       method: 'POST',
       body: form,
@@ -132,10 +148,16 @@ export async function ingestFile(
   )
 }
 
-export async function listNormalizedEvents(batchId?: number): Promise<NormalizedEvent[]> {
-  const params = new URLSearchParams({ limit: '20' })
-  if (batchId) params.set('batch_id', String(batchId))
-  return request<NormalizedEvent[]>(`/api/events/normalized?${params.toString()}`)
+export async function listNormalizedEvents(
+  token?: string,
+  filters: { batchId?: number; limit?: number; offset?: number } = {},
+): Promise<NormalizedEvent[]> {
+  const params = new URLSearchParams({
+    limit: String(filters.limit ?? 20),
+    offset: String(filters.offset ?? 0),
+  })
+  if (filters.batchId) params.set('batch_id', String(filters.batchId))
+  return request<NormalizedEvent[]>(`/api/events/normalized?${params.toString()}`, undefined, token)
 }
 
 export async function listIngestErrors(batchId?: number): Promise<IngestErrorRecord[]> {

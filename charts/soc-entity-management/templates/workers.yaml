@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soc.ingestionWorkerName" . }}
+  labels:
+    {{- include "soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-ingestion-worker
+spec:
+  replicas: {{ .Values.workers.ingestion.replicas }}
+  selector:
+    matchLabels:
+      {{- include "soc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kafka-ingestion-worker
+  template:
+    metadata:
+      labels:
+        {{- include "soc.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kafka-ingestion-worker
+    spec:
+      containers:
+        - name: kafka-ingestion-worker
+          image: {{ include "soc.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "app.workers.kafka_ingestion_worker"]
+          {{- if .Values.monitoring.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.monitoring.workerMetricsPort }}
+          {{- end }}
+          env:
+            {{- include "soc.backendEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.workers.resources | nindent 12 }}
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "soc.ingestionWorkerName" . }}
+  labels:
+    {{- include "soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-ingestion-worker
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ .Values.monitoring.workerMetricsPort }}
+      targetPort: metrics
+  selector:
+    {{- include "soc.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-ingestion-worker
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soc.graphWorkerName" . }}
+  labels:
+    {{- include "soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-graph-worker
+spec:
+  replicas: {{ .Values.workers.graph.replicas }}
+  selector:
+    matchLabels:
+      {{- include "soc.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: kafka-graph-worker
+  template:
+    metadata:
+      labels:
+        {{- include "soc.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kafka-graph-worker
+    spec:
+      containers:
+        - name: kafka-graph-worker
+          image: {{ include "soc.backendImage" . | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "-m", "app.workers.kafka_graph_worker"]
+          {{- if .Values.monitoring.enabled }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.monitoring.workerMetricsPort }}
+          {{- end }}
+          env:
+            {{- include "soc.backendEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.workers.resources | nindent 12 }}
+{{- if .Values.monitoring.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "soc.graphWorkerName" . }}
+  labels:
+    {{- include "soc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-graph-worker
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ .Values.monitoring.workerMetricsPort }}
+      targetPort: metrics
+  selector:
+    {{- include "soc.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kafka-graph-worker
+{{- end }}

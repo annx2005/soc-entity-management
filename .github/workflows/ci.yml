@@ -28,6 +28,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare backend env file
+        run: cp ../.env.example ../.env
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -86,6 +89,47 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
+  terraform-validate:
+    name: Terraform validate
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra/terraform
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check
+
+      - name: Initialize Terraform without backend
+        run: terraform init -backend=false
+
+      - name: Validate Terraform
+        run: terraform validate
+
+  helm-validate:
+    name: Helm validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm chart
+        run: helm lint charts/soc-entity-management
+
+      - name: Render Helm chart
+        run: helm template soc-entity-management charts/soc-entity-management -f charts/soc-entity-management/values-gke.yaml
+
   docker-build:
     name: Docker build
     runs-on: ubuntu-latest
@@ -93,6 +137,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare Docker Compose env file
+        run: cp .env.example .env
 
       - name: Validate Docker Compose config
         run: docker compose config

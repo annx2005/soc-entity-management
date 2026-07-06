@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      target: dev
     env_file:
       - .env
     environment:
@@ -22,6 +23,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     env_file:
       - .env
     environment:
@@ -181,10 +183,54 @@ services:
       kafka-init-topics:
         condition: service_completed_successfully
 
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    command:
+      - --kafka.server=kafka:9092
+      - --web.listen-address=:9308
+    depends_on:
+      kafka-init-topics:
+        condition: service_completed_successfully
+
+  prometheus:
+    image: prom/prometheus:v3.13.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      backend:
+        condition: service_started
+      kafka-ingestion-worker:
+        condition: service_started
+      kafka-graph-worker:
+        condition: service_started
+      kafka-exporter:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: "false"
+      GF_PLUGINS_PLUGIN_ADMIN_EXTERNAL_MANAGE_ENABLED: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+
   neo4j:
     image: neo4j:5-community
-    env_file:
-      - .env
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH}
     ports:
@@ -197,3 +243,5 @@ volumes:
   postgres_data:
   neo4j_data:
   kafka_data:
+  prometheus_data:
+  grafana_data:

@@ -16,7 +16,7 @@ from app.database.session import Base, get_db
 def test_ingest_file_requires_bearer_token() -> None:
     client = events_test_client()
 
-    response = client.post("/api/events/ingest-file", data={"file_path": "/missing.jsonl"})
+    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
 
     assert response.status_code == 401
 
@@ -24,13 +24,21 @@ def test_ingest_file_requires_bearer_token() -> None:
 def test_ingest_file_rejects_viewer_role() -> None:
     client = events_test_client(context=tenant_context(role="viewer"))
 
-    response = client.post("/api/events/ingest-file", data={"file_path": "/missing.jsonl"})
+    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
 
     assert response.status_code == 403
     assert response.json()["detail"] == "insufficient role for ingest"
 
 
 def test_ingest_file_allows_analyst_role() -> None:
+    client = events_test_client(context=tenant_context(role="analyst"))
+
+    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
+
+    assert response.status_code == 404
+
+
+def test_sync_ingest_route_is_removed() -> None:
     client = events_test_client(context=tenant_context(role="analyst"))
 
     response = client.post("/api/events/ingest-file", data={"file_path": "/missing.jsonl"})

@@ -12,6 +12,7 @@ from app.graph.constants import label_for_entity_type, validate_relationship_typ
 from app.graph.ids import graph_event_id, observation_id, relationship_fact_id
 from app.graph.schemas import (
     EntityResponse,
+    EntityTypeCountResponse,
     EvidenceResponse,
     GraphEdge,
     GraphNode,
@@ -37,6 +38,8 @@ class GraphRepository:
             "CREATE INDEX entity_tenant_value_idx IF NOT EXISTS FOR (n:Entity) ON (n.tenant_id, n.value)",
             "CREATE INDEX event_tenant_time_idx IF NOT EXISTS FOR (n:Event) ON (n.tenant_id, n.time)",
             "CREATE INDEX relationship_fact_tenant_type_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.relationship_type)",
+            "CREATE INDEX relationship_fact_tenant_from_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.from_id)",
+            "CREATE INDEX relationship_fact_tenant_to_idx IF NOT EXISTS FOR (n:RelationshipFact) ON (n.tenant_id, n.to_id)",
         ]
         async with self._driver.session() as session:
             for statement in statements:
@@ -85,6 +88,7 @@ class GraphRepository:
 
     async def upsert_entity(self, entity: Entity) -> str:
         label = label_for_entity_type(entity.type)
+        properties = await self._merged_entity_properties(entity)
         query = f"""
         MERGE (entity:Entity:{label} {{id: $id}})
         ON CREATE SET
@@ -123,11 +127,19 @@ class GraphRepository:
                 first_seen=entity.first_seen,
                 last_seen=entity.last_seen,
                 source=entity.source,
-                properties_json=_json_dumps(entity.properties),
-                promoted_properties=_promoted_properties(entity),
+                properties_json=_json_dumps(properties),
+                promoted_properties=_promoted_properties(entity.model_copy(update={"properties": properties})),
             )
             record = await result.single()
             return str(record["status"])
+
+    async def _merged_entity_properties(self, entity: Entity) -> dict[str, Any]:
+        query = "MATCH (entity:Entity {id: $id, tenant_id: $tenant_id}) RETURN entity.properties_json AS properties_json"
+        async with self._driver.session() as session:
+            result = await session.run(query, id=entity.id, tenant_id=entity.tenant_id)
+            record = await result.single()
+        existing = _json_loads(record["properties_json"]) if record else {}
+        return _merge_properties(existing, entity.properties)
 
     async def upsert_observation(self, event: OCSFEvent, entity: Entity) -> str:
         field_path = str(entity.properties.get("source_field") or "unknown")
@@ -269,10 +281,31 @@ class GraphRepository:
             result = await session.run(query, **params)
             return [_entity_response(record["entity"]) async for record in result]
 
+    async def count_entities_by_type(self, tenant_id: str, value: str | None = None) -> list[EntityTypeCountResponse]:
+        clauses = ["entity.tenant_id = $tenant_id"]
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if value:
+            clauses.append("entity.value CONTAINS $value")
+            params["value"] = value
+        query = f"""
+        MATCH (entity:Entity)
+        WHERE {" AND ".join(clauses)}
+        RETURN entity.entity_type AS entity_type, count(entity) AS count
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, **params)
+            return [
+                EntityTypeCountResponse(
+                    entity_type=str(record["entity_type"]),
+                    count=int(record["count"] or 0),
+                )
+                async for record in result
+            ]
+
     async def list_relationships(self, tenant_id: str, entity_id: str, limit: int = 100) -> list[RelationshipResponse]:
         query = """
-        MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id})-[rel]-(other:Entity {tenant_id: $tenant_id})
-        MATCH (fact:RelationshipFact {id: rel.fact_id, tenant_id: $tenant_id})
+        MATCH (fact:RelationshipFact {tenant_id: $tenant_id})
+        WHERE fact.from_id = $entity_id OR fact.to_id = $entity_id
         RETURN fact
         ORDER BY fact.last_seen DESC
         LIMIT $limit
@@ -292,6 +325,32 @@ class GraphRepository:
         async with self._driver.session() as session:
             result = await session.run(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
             return [_evidence_response(record["event"], record["obs"]) async for record in result]
+
+    async def list_relationship_evidence(
+        self,
+        tenant_id: str,
+        entity_id: str,
+        relationship_id: str,
+        limit: int = 100,
+    ) -> list[EvidenceResponse]:
+        query = """
+        MATCH (entity:Entity {id: $entity_id, tenant_id: $tenant_id})
+        MATCH (fact:RelationshipFact {id: $relationship_id, tenant_id: $tenant_id})
+        WHERE fact.from_id = entity.id OR fact.to_id = entity.id
+        MATCH (event:Event {tenant_id: $tenant_id})-[:EVIDENCES]->(fact)
+        RETURN event, fact
+        ORDER BY event.time DESC
+        LIMIT $limit
+        """
+        async with self._driver.session() as session:
+            result = await session.run(
+                query,
+                tenant_id=tenant_id,
+                entity_id=entity_id,
+                relationship_id=relationship_id,
+                limit=limit,
+            )
+            return [_relationship_evidence_response(record["event"], record["fact"]) async for record in result]
 
     async def get_graph(
         self,
@@ -386,6 +445,24 @@ def _promoted_properties(entity: Entity) -> dict[str, Any]:
             "path": entity.properties.get("path"),
             "cmd_line": entity.properties.get("cmd_line"),
         }
+    if entity.type == EntityType.URL:
+        return {
+            "scheme": entity.properties.get("scheme"),
+            "host": entity.properties.get("host"),
+            "path": entity.properties.get("path"),
+        }
+    if entity.type == EntityType.EMAIL:
+        return {"domain": entity.properties.get("domain")}
+    if entity.type == EntityType.CVE:
+        return {"year": entity.properties.get("year")}
+    if entity.type == EntityType.CLOUD_RESOURCE:
+        return {
+            "provider": entity.properties.get("provider"),
+            "account_id": entity.properties.get("account_id"),
+            "region": entity.properties.get("region"),
+            "resource_type": entity.properties.get("resource_type"),
+            "service": entity.properties.get("service"),
+        }
     return {}
 
 
@@ -412,6 +489,35 @@ def _json_loads(value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _merge_properties(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if value in (None, "", [], {}):
+            continue
+        if key == "source_fields":
+            merged[key] = _merge_unique_strings(merged.get(key), value)
+        elif key == "source_field":
+            merged.setdefault(key, value)
+        elif key not in merged or merged[key] in (None, "", [], {}):
+            merged[key] = value
+        elif isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_properties(merged[key], value)
+    return merged
+
+
+def _merge_unique_strings(existing: Any, incoming: Any) -> list[str]:
+    values: list[str] = []
+    for source in (existing, incoming):
+        items = source if isinstance(source, list) else [source]
+        for item in items:
+            if item is None:
+                continue
+            value = str(item)
+            if value not in values:
+                values.append(value)
+    return values
 
 
 def _entity_response(node: Node) -> EntityResponse:
@@ -456,6 +562,21 @@ def _evidence_response(event_node: Node, observation_node: Node) -> EvidenceResp
         source_name=event.get("source_name"),
         field_path=obs.get("field_path"),
         value=obs.get("value"),
+    )
+
+
+def _relationship_evidence_response(event_node: Node, relationship_fact_node: Node) -> EvidenceResponse:
+    event = dict(event_node)
+    relationship_fact = dict(relationship_fact_node)
+    return EvidenceResponse(
+        event_id=str(event.get("event_id")),
+        time=_temporal_to_str(event.get("time")),
+        class_uid=event.get("class_uid"),
+        class_name=event.get("class_name"),
+        activity_id=event.get("activity_id"),
+        activity_name=event.get("activity_name"),
+        source_name=event.get("source_name"),
+        relationship_id=str(relationship_fact.get("id")),
     )
 
 

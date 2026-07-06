@@ -1,6 +1,7 @@
 import cytoscape from 'cytoscape'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import type { Core, ElementDefinition, NodeSingular } from 'cytoscape'
+import { Crosshair, MoveDiagonal2 } from 'lucide-react'
 import type { GraphLayout, GraphResponse } from './types'
 
 type GraphViewProps = {
@@ -21,6 +22,10 @@ const TYPE_COLORS: Record<string, string> = {
   domain: '#7a4f9a',
   file_hash: '#9a3f43',
   process: '#4e647a',
+  url: '#2d6a9f',
+  email: '#b35b2e',
+  cve: '#8f4b66',
+  cloud_resource: '#6a6f25',
 }
 
 export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function GraphView(
@@ -48,7 +53,7 @@ export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function Gr
       container: containerRef.current,
       elements,
       minZoom: 0.35,
-      maxZoom: 2.2,
+      maxZoom: 2.6,
       wheelSensitivity: 0.18,
       style: [
         {
@@ -68,27 +73,53 @@ export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function Gr
             'text-background-color': '#ffffff',
             'text-background-opacity': 0.92,
             'text-background-padding': '3px',
-            'text-margin-y': -9,
-            'text-wrap': 'ellipsis',
-            'text-max-width': '110px',
+            'text-margin-y': -12,
+            'text-wrap': 'wrap',
+            'text-max-width': '124px',
+            'text-valign': 'bottom',
+            'text-halign': 'center',
             width: '38px',
           },
         },
         {
           selector: 'edge',
           style: {
-            'curve-style': 'bezier',
+            'curve-style': 'unbundled-bezier',
+            'control-point-distances': [22, -22],
+            'control-point-weights': [0.35, 0.65],
             'line-color': '#aeb8bf',
             'target-arrow-color': '#aeb8bf',
             'target-arrow-shape': 'triangle',
-            width: '1.8px',
-            label: 'data(label)',
+            'line-opacity': 0.68,
+            'target-arrow-fill': 'filled',
+            width: '1.6px',
+            label: '',
             color: '#5a6670',
-            'font-size': '8px',
+            'font-size': '9px',
             'text-background-color': '#ffffff',
             'text-background-opacity': 0.86,
             'text-background-padding': '2px',
             'text-rotation': 'autorotate',
+          },
+        },
+        {
+          selector: 'edge.emphasized',
+          style: {
+            width: '2.2px',
+            'line-opacity': 0.9,
+            'target-arrow-color': '#78848d',
+          },
+        },
+        {
+          selector: 'edge.edge-selected',
+          style: {
+            label: 'data(label)',
+            width: '2.8px',
+            'line-opacity': 1,
+            'line-color': '#66757f',
+            'target-arrow-color': '#66757f',
+            'font-weight': 'bold',
+            'text-background-opacity': 0.94,
           },
         },
         {
@@ -110,12 +141,25 @@ export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function Gr
       if (entityId) onNodeSelect?.(entityId)
     })
 
-    const selectedNode = cy
-      .nodes()
-      .filter((node) => node.data('entityId') === selectedEntityId)
-      .first()
-    selectedNode.addClass('selected')
-    cy.fit(undefined, 28)
+    const selectedNodes = cy.nodes().filter((node) => node.data('entityId') === selectedEntityId)
+    if (selectedNodes.length > 0) {
+      selectedNodes.addClass('selected')
+      selectedNodes.connectedEdges().addClass('emphasized')
+      selectedNodes.closedNeighborhood().difference(selectedNodes).addClass('neighbor')
+    }
+
+    cy.on('tap', 'edge', (event) => {
+      cy.edges().removeClass('edge-selected')
+      event.target.addClass('edge-selected')
+    })
+
+    cy.on('tap', (event) => {
+      if (event.target === cy) {
+        cy.edges().removeClass('edge-selected')
+      }
+    })
+
+    cy.fit(undefined, 48)
     cyRef.current = cy
 
     return () => {
@@ -128,7 +172,21 @@ export const GraphView = forwardRef<GraphViewHandle, GraphViewProps>(function Gr
     return <div className="graph-empty">No graph data</div>
   }
 
-  return <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
+  return (
+    <div className="graph-shell">
+      <div className="graph-toolbar">
+        <button type="button" className="ghost-button graph-tool" onClick={() => cyRef.current?.fit(undefined, 48)}>
+          <MoveDiagonal2 size={14} />
+          <span>Fit</span>
+        </button>
+        <button type="button" className="ghost-button graph-tool" onClick={() => focusSelectedNode(cyRef.current, selectedEntityId)}>
+          <Crosshair size={14} />
+          <span>Center</span>
+        </button>
+      </div>
+      <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
+    </div>
+  )
 })
 
 function toElements(graph: GraphResponse | null): ElementDefinition[] {
@@ -183,4 +241,21 @@ function layoutOptions(layout: GraphLayout) {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function focusSelectedNode(cy: Core | null, selectedEntityId: string | null): void {
+  if (!cy) return
+  const selectedNode = cy
+    .nodes()
+    .filter((node) => node.data('entityId') === selectedEntityId)
+    .first()
+  if (selectedNode.length === 0) {
+    cy.fit(undefined, 48)
+    return
+  }
+  cy.animate({
+    center: { eles: selectedNode },
+    zoom: Math.max(cy.zoom(), 1.1),
+    duration: 220,
+  })
 }

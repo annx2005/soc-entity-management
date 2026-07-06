@@ -5,6 +5,7 @@ import ipaddress
 import re
 from datetime import datetime, timezone
 from typing import Any, Iterable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.entities.schemas import Entity, EntityType
 from app.ocsf.schemas import OCSFEvent
@@ -32,6 +33,9 @@ HASH_ALGORITHMS_BY_LENGTH = {
     64: "sha256",
 }
 DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+CVE_RE = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
+URL_RE = re.compile(r"\bhttps?://[^\s<>'\"]+", re.IGNORECASE)
 
 
 def extract_entities(event: OCSFEvent) -> list[Entity]:
@@ -42,6 +46,9 @@ def extract_entities(event: OCSFEvent) -> list[Entity]:
             return
         key = (event.tenant_id, entity_type, value)
         if key in entities:
+            entities[key] = entities[key].model_copy(
+                update={"properties": _merge_entity_properties(entities[key].properties, properties or {})}
+            )
             return
         entities[key] = Entity(
             id=_entity_id(event.tenant_id, entity_type, value),
@@ -51,7 +58,7 @@ def extract_entities(event: OCSFEvent) -> list[Entity]:
             first_seen=_event_time_iso(event),
             last_seen=_event_time_iso(event),
             source=event.source_name,
-            properties=properties or {},
+            properties=_normalize_entity_properties(properties or {}),
         )
 
     actor = _as_dict(event.actor)
@@ -89,6 +96,39 @@ def extract_entities(event: OCSFEvent) -> list[Entity]:
         {"source_field": "query.hostname"},
     )
 
+    for source_field, value in _iter_email_values(event):
+        email = _normalize_email(value)
+        add_entity(
+            EntityType.EMAIL,
+            email,
+            {"source_field": source_field, "domain": _email_domain(email)},
+        )
+
+    for source_field, value in _iter_url_values(event):
+        url = _normalize_url(value)
+        add_entity(
+            EntityType.URL,
+            url,
+            {"source_field": source_field, **_url_properties(url)},
+        )
+
+    for source_field, value in _iter_cve_values(event):
+        cve = _normalize_cve(value)
+        add_entity(
+            EntityType.CVE,
+            cve,
+            {"source_field": source_field, "year": _cve_year(cve)},
+        )
+
+    for source_field, resource in _iter_cloud_resources(event):
+        cloud_resource = _normalize_cloud_resource(resource, _as_dict(getattr(event, "cloud", None)))
+        if cloud_resource is not None:
+            add_entity(
+                EntityType.CLOUD_RESOURCE,
+                cloud_resource["value"],
+                {"source_field": source_field, **cloud_resource["properties"]},
+            )
+
     for source_field, process in _iter_processes(event):
         process_entity = _normalize_process(process)
         if process_entity is not None:
@@ -113,6 +153,40 @@ def extract_entities(event: OCSFEvent) -> list[Entity]:
             )
 
     return list(entities.values())
+
+
+def _normalize_entity_properties(properties: dict[str, Any]) -> dict[str, Any]:
+    normalized = {key: value for key, value in properties.items() if value is not None}
+    source_field = normalized.get("source_field")
+    if source_field:
+        normalized["source_fields"] = [str(source_field)]
+    return normalized
+
+
+def _merge_entity_properties(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    normalized_incoming = _normalize_entity_properties(incoming)
+    for key, value in normalized_incoming.items():
+        if key == "source_fields":
+            merged[key] = _merge_unique_strings(merged.get(key), value)
+        elif key == "source_field":
+            merged.setdefault(key, value)
+        elif key not in merged or merged[key] in (None, "", [], {}):
+            merged[key] = value
+        elif isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_entity_properties(merged[key], value)
+    return merged
+
+
+def _merge_unique_strings(existing: Any, incoming: Any) -> list[str]:
+    values: list[str] = []
+    for value in _as_list(existing) + _as_list(incoming):
+        if value is None:
+            continue
+        text = str(value)
+        if text not in values:
+            values.append(text)
+    return values
 
 
 def _entity_id(tenant_id: str, entity_type: EntityType, value: str) -> str:
@@ -189,6 +263,173 @@ def _normalize_domain(value: Any) -> str | None:
     if any(not DOMAIN_LABEL_RE.fullmatch(label) for label in labels):
         return None
     return normalized
+
+
+def _iter_email_values(event: OCSFEvent) -> Iterable[tuple[str, Any]]:
+    actor = _as_dict(event.actor)
+    actor_user = _as_dict(actor.get("user"))
+    yield "actor.user.email", actor_user.get("email")
+
+    user = _as_dict(getattr(event, "user", None))
+    yield "user.email", user.get("email")
+
+    email = _as_dict(getattr(event, "email", None))
+    for source_field in ("from", "sender"):
+        yield f"email.{source_field}", email.get(source_field)
+    for source_field in ("to", "recipients"):
+        for value in _iter_scalar_or_list(email.get(source_field)):
+            yield f"email.{source_field}", value
+
+
+def _iter_url_values(event: OCSFEvent) -> Iterable[tuple[str, Any]]:
+    for source_field, container_name in (
+        ("url.url", "url"),
+        ("http_request.url", "http_request"),
+        ("request.url", "request"),
+    ):
+        yield source_field, _as_dict(getattr(event, container_name, None)).get("url")
+
+    for process_source, process in _iter_processes(event):
+        cmd_line = _clean_text(process.get("cmd_line"))
+        if cmd_line:
+            for match in URL_RE.finditer(cmd_line):
+                yield f"{process_source}.cmd_line", match.group(0).rstrip(").,;]")
+
+
+def _iter_cve_values(event: OCSFEvent) -> Iterable[tuple[str, Any]]:
+    for index, vulnerability in enumerate(_as_list(event.vulnerabilities)):
+        if isinstance(vulnerability, dict):
+            yield f"vulnerabilities[{index}].cve", vulnerability.get("cve")
+            for field in ("desc", "description", "title"):
+                for cve in _extract_cves(vulnerability.get(field)):
+                    yield f"vulnerabilities[{index}].{field}", cve
+
+    finding = _as_dict(event.finding)
+    for field in ("cve", "cves"):
+        for value in _iter_scalar_or_list(finding.get(field)):
+            yield f"finding.{field}", value
+    for field in ("desc", "description", "title"):
+        for cve in _extract_cves(finding.get(field)):
+            yield f"finding.{field}", cve
+
+
+def _iter_cloud_resources(event: OCSFEvent) -> Iterable[tuple[str, dict[str, Any]]]:
+    resource = _as_dict(getattr(event, "resource", None))
+    if resource:
+        yield "resource", resource
+
+    for index, item in enumerate(_as_list(getattr(event, "resources", None))):
+        if isinstance(item, dict):
+            yield f"resources[{index}]", item
+
+    cloud_resource = _as_dict(_as_dict(getattr(event, "cloud", None)).get("resource"))
+    if cloud_resource:
+        yield "cloud.resource", cloud_resource
+
+
+def _iter_scalar_or_list(value: Any) -> Iterable[Any]:
+    if isinstance(value, list):
+        yield from value
+    else:
+        yield value
+
+
+def _normalize_email(value: Any) -> str | None:
+    cleaned = _clean_text(value)
+    if cleaned is None:
+        return None
+    normalized = cleaned.lower()
+    if not EMAIL_RE.fullmatch(normalized):
+        return None
+    domain = normalized.rsplit("@", 1)[-1]
+    return normalized if _normalize_domain(domain) else None
+
+
+def _email_domain(value: str | None) -> str | None:
+    return value.rsplit("@", 1)[-1] if value else None
+
+
+def _normalize_url(value: Any) -> str | None:
+    cleaned = _clean_text(value)
+    if cleaned is None:
+        return None
+    try:
+        parsed = urlsplit(cleaned)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return None
+    host = _normalize_domain(parsed.hostname)
+    if host is None:
+        return None
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return None
+    port = f":{parsed_port}" if parsed_port else ""
+    path = parsed.path or ""
+    query = urlencode(parse_qsl(parsed.query, keep_blank_values=True), doseq=True)
+    return urlunsplit((parsed.scheme.lower(), f"{host}{port}", path, query, ""))
+
+
+def _url_properties(value: str | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    parsed = urlsplit(value)
+    return {"scheme": parsed.scheme, "host": parsed.hostname, "path": parsed.path or None}
+
+
+def _normalize_cve(value: Any) -> str | None:
+    cleaned = _clean_text(value)
+    if cleaned is None:
+        return None
+    match = CVE_RE.search(cleaned)
+    return match.group(0).upper() if match else None
+
+
+def _extract_cves(value: Any) -> Iterable[str]:
+    cleaned = _clean_text(value)
+    if cleaned is None:
+        return []
+    return [match.group(0) for match in CVE_RE.finditer(cleaned)]
+
+
+def _cve_year(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value.split("-")[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _normalize_cloud_resource(resource: dict[str, Any], cloud: dict[str, Any]) -> dict[str, Any] | None:
+    value = None
+    id_field = None
+    for field in ("uid", "arn", "resource_id", "id", "name"):
+        value = _clean_text(resource.get(field))
+        if value:
+            id_field = field
+            break
+    if value is None:
+        return None
+
+    provider = _clean_text(resource.get("provider") or cloud.get("provider"))
+    account_id = _clean_text(resource.get("account_id") or cloud.get("account_id"))
+    region = _clean_text(resource.get("region") or cloud.get("region"))
+    resource_type = _clean_text(resource.get("type") or resource.get("resource_type") or resource.get("service"))
+    service = _clean_text(resource.get("service"))
+
+    properties = {
+        "id_field": id_field,
+        "provider": provider.lower() if provider else None,
+        "account_id": account_id,
+        "region": region,
+        "resource_type": resource_type.lower() if resource_type else None,
+        "service": service.lower() if service else None,
+        "name": _clean_text(resource.get("name")),
+    }
+    return {"value": value.strip(), "properties": {key: item for key, item in properties.items() if item is not None}}
 
 
 def _iter_processes(event: OCSFEvent) -> Iterable[tuple[str, dict[str, Any]]]:

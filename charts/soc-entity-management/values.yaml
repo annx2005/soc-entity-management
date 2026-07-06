@@ -1,0 +1,188 @@
+global:
+  imageRegistry: example.invalid/soc-entity-management
+  imageTag: latest
+  imagePullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+images:
+  backend:
+    repository: backend
+  frontend:
+    repository: frontend
+
+secrets:
+  create: true
+  name: ""
+  jwtSecretKey: ""
+  postgresPassword: ""
+  neo4jPassword: ""
+  enrichmentIpinfoToken: ""
+  enrichmentMalwareBazaarAuthKey: ""
+
+app:
+  name: SOC Entity Management
+  environment: gke
+  tenantIdDefault: default
+  jwtAlgorithm: HS256
+  accessTokenExpireMinutes: 60
+
+backend:
+  replicas: 1
+  port: 8000
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+frontend:
+  replicas: 1
+  port: 80
+  service:
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+workers:
+  ingestion:
+    replicas: 1
+  graph:
+    replicas: 1
+  resources:
+    requests:
+      cpu: 150m
+      memory: 384Mi
+    limits:
+      cpu: 750m
+      memory: 768Mi
+
+monitoring:
+  enabled: true
+  workerMetricsPort: 9100
+  prometheus:
+    image: prom/prometheus:v3.13.0
+    port: 9090
+    storage:
+      size: 5Gi
+      storageClassName: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  grafana:
+    image: grafana/grafana:13.1.0
+    port: 3000
+    adminUser: admin
+    adminPassword: admin
+    storage:
+      size: 2Gi
+      storageClassName: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  kafkaExporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    port: 9308
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+postgresql:
+  image: postgres:16-alpine
+  auth:
+    username: soc
+    database: soc_entity_management
+  storage:
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+redis:
+  image: redis:7-alpine
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+kafka:
+  image: apache/kafka:3.9.1
+  storage:
+    size: 10Gi
+    storageClassName: ""
+  topics:
+    rawEvents: soc.raw-events.v1
+    normalizedEvents: soc.normalized-events.v1
+    ocsfEvents: soc.ocsf-events.v1
+    deadLetter: soc.ingest-dlq.v1
+  groupIds:
+    ingestion: soc-ingestion-workers
+    graph: soc-graph-workers
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+neo4j:
+  image: neo4j:5-community
+  auth:
+    username: neo4j
+  storage:
+    size: 10Gi
+    storageClassName: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+enrichment:
+  enabled: true
+  providerMode: offline
+  ipSourcePath: /data/enrichment/ip_enrichment.json
+  fileHashSourcePath: /data/enrichment/file_hash_enrichment.json
+  ipinfoBaseUrl: https://api.ipinfo.io/lite
+  malwareBazaarUrl: https://mb-api.abuse.ch/api/v1/
+  httpTimeoutSeconds: 5
+  cacheTtlSeconds: 86400
+
+ingress:
+  enabled: true
+  className: gce
+  staticIpName: ""
+  hosts: []

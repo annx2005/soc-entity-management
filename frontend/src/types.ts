@@ -1,4 +1,14 @@
-export type EntityType = 'user' | 'host' | 'ip' | 'domain' | 'file_hash' | 'process'
+export type EntityType =
+  | 'user'
+  | 'host'
+  | 'ip'
+  | 'domain'
+  | 'file_hash'
+  | 'process'
+  | 'url'
+  | 'email'
+  | 'cve'
+  | 'cloud_resource'
 
 export type GraphLayout = 'force-directed' | 'hierarchical'
 
@@ -35,6 +45,11 @@ export type Entity = {
   properties: Record<string, unknown>
 }
 
+export type EntityTypeCount = {
+  entity_type: EntityType | string
+  count: number
+}
+
 export type Relationship = {
   id: string
   tenant_id: string
@@ -45,6 +60,19 @@ export type Relationship = {
   last_seen: string | null
   count: number
   sample_evidence_refs: string[]
+}
+
+export type Evidence = {
+  event_id: string
+  time: string | null
+  class_uid: number | null
+  class_name: string | null
+  activity_id: number | null
+  activity_name: string | null
+  source_name: string | null
+  field_path: string | null
+  value: string | null
+  relationship_id: string | null
 }
 
 export type GraphNode = {
@@ -82,6 +110,7 @@ export type NormalizedEvent = {
   event_type: string
   source: string
   normalized_event: Record<string, unknown>
+  created_at: string | null
 }
 
 export type IngestErrorRecord = {
@@ -104,7 +133,18 @@ export type AuditLog = {
   created_at: string
 }
 
-export const ENTITY_TYPES: EntityType[] = ['user', 'host', 'ip', 'domain', 'file_hash', 'process']
+export const ENTITY_TYPES: EntityType[] = [
+  'user',
+  'host',
+  'ip',
+  'domain',
+  'file_hash',
+  'process',
+  'url',
+  'email',
+  'cve',
+  'cloud_resource',
+]
 
 export const RELATIONSHIP_TYPES = [
   'LOGGED_IN_TO',

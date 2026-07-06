@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 from app.entities.schemas import Entity, EntityType
 from app.enrichment.cache import EnrichmentCache
 from app.enrichment.providers import EnrichmentProvider
 from app.enrichment.schemas import EnrichmentResult
+from app.observability.metrics import record_enrichment_lookup
 
 
 ENRICHABLE_TYPES = {EntityType.IP, EntityType.FILE_HASH}
@@ -35,36 +38,46 @@ class EnrichmentService:
         return enriched
 
     async def _enrich_entity(self, tenant_id: str, entity: Entity) -> Entity:
+        started = perf_counter()
+        cache_status = "miss"
+        outcome = "success"
         cache_key = enrichment_cache_key(tenant_id, entity.type.value, entity.value)
         cache_failed = False
 
         try:
-            cached = await self._cache.get(cache_key) if self._cache else None
-        except Exception as exc:
-            cached = None
-            cache_failed = True
-            cache_error = str(exc)
-        else:
-            cache_error = None
-
-        if cached is not None:
-            return _with_enrichment(entity, cached.model_copy(update={"cache_status": "hit"}))
-
-        try:
-            result = self._provider.lookup(entity.type, entity.value)
-        except Exception as exc:
-            return _with_enrichment_error(entity, str(exc))
-
-        if result is None:
-            return _with_enrichment_error(entity, cache_error) if cache_failed and cache_error else entity
-
-        result = result.model_copy(update={"cache_status": "error" if cache_failed else "miss"})
-        if self._cache is not None:
             try:
-                await self._cache.set(cache_key, result, self._ttl_seconds)
-            except Exception:
-                pass
-        return _with_enrichment(entity, result)
+                cached = await self._cache.get(cache_key) if self._cache else None
+            except Exception as exc:
+                cached = None
+                cache_failed = True
+                cache_status = "error"
+                cache_error = str(exc)
+            else:
+                cache_error = None
+
+            if cached is not None:
+                cache_status = "hit"
+                return _with_enrichment(entity, cached.model_copy(update={"cache_status": "hit"}))
+
+            try:
+                result = await self._provider.lookup(entity.type, entity.value)
+            except Exception as exc:
+                outcome = "provider_error"
+                return _with_enrichment_error(entity, str(exc))
+
+            if result is None:
+                outcome = "not_found"
+                return _with_enrichment_error(entity, cache_error) if cache_failed and cache_error else entity
+
+            result = result.model_copy(update={"cache_status": "error" if cache_failed else "miss"})
+            if self._cache is not None:
+                try:
+                    await self._cache.set(cache_key, result, self._ttl_seconds)
+                except Exception:
+                    pass
+            return _with_enrichment(entity, result)
+        finally:
+            record_enrichment_lookup(entity.type.value, cache_status, outcome, perf_counter() - started)
 
 
 def enrichment_cache_key(tenant_id: str, entity_type: str, value: str) -> str:

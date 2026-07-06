@@ -24,6 +24,11 @@ class EntityResponse(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
+class EntityTypeCountResponse(BaseModel):
+    entity_type: str
+    count: int
+
+
 class RelationshipResponse(BaseModel):
     id: str
     tenant_id: str
@@ -46,6 +51,7 @@ class EvidenceResponse(BaseModel):
     source_name: Optional[str] = None
     field_path: Optional[str] = None
     value: Optional[str] = None
+    relationship_id: Optional[str] = None
 
 
 class GraphNode(BaseModel):
