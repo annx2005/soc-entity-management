@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 import httpx
+from prometheus_client import REGISTRY, generate_latest
 
 from app.entities.schemas import Entity, EntityType
 from app.enrichment.providers import (
@@ -203,6 +204,19 @@ def test_enrichment_service_gracefully_handles_cache_and_provider_errors() -> No
     assert enriched.properties["source_field"] == "dst_endpoint.ip"
     assert enriched.properties["enrichment_status"] == "error"
     assert "provider failed" in enriched.properties["enrichment_error"]
+
+
+def test_enrichment_service_records_prometheus_metrics() -> None:
+    service = EnrichmentService(FakeProvider({(EntityType.IP, "9.9.9.9"): {"country": "US"}}))
+    entity = make_entity(EntityType.IP, "9.9.9.9", {"source_field": "dst_endpoint.ip"})
+
+    asyncio.run(service.enrich_entities("tenant-a", [entity]))
+
+    output = generate_latest(REGISTRY).decode("utf-8")
+    assert "soc_enrichment_requests_total" in output
+    assert 'entity_type="ip"' in output
+    assert 'cache_status="miss"' in output
+    assert 'outcome="success"' in output
 
 
 def make_entity(entity_type: EntityType, value: str, properties: dict[str, Any] | None = None) -> Entity:

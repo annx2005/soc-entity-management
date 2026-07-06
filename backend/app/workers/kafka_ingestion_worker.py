@@ -10,6 +10,7 @@ from app.database.session import SessionLocal, init_db
 from app.ingestion.kafka_client import KafkaJsonProducer
 from app.ingestion.kafka_messages import RawEventMessage
 from app.ingestion.kafka_service import process_raw_event_message
+from app.observability.metrics import start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ async def run_worker() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = get_settings()
     init_db()
+    start_worker_metrics_server()
 
     consumer = AIOKafkaConsumer(
         settings.kafka_raw_events_topic,

@@ -16,6 +16,7 @@ from app.graph.kafka_service import process_ocsf_event_message
 from app.graph.repository import GraphRepository, create_graph_driver
 from app.graph.service import GraphService
 from app.ingestion.kafka_messages import OCSFEventMessage
+from app.observability.metrics import start_worker_metrics_server
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ async def run_worker() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     settings = get_settings()
     init_db()
+    start_worker_metrics_server()
 
     consumer = AIOKafkaConsumer(
         settings.kafka_ocsf_events_topic,

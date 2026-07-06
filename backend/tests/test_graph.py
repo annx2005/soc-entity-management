@@ -7,6 +7,7 @@ from collections import defaultdict
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY, generate_latest
 
 from app.api.entities import router as entities_router
 from app.auth.dependencies import TenantContext, get_tenant_context
@@ -217,6 +218,12 @@ def test_graph_service_audits_entity_and_relationship_upserts() -> None:
     assert "relationship_created" in actions
     assert "relationship_updated" in actions
     assert all(entry["tenant_id"] == event.tenant_id for entry in audit.entries)
+
+    metrics_output = generate_latest(REGISTRY).decode("utf-8")
+    assert "soc_graph_events_processed_total" in metrics_output
+    assert "soc_graph_entities_upserted_total" in metrics_output
+    assert "soc_graph_relationships_upserted_total" in metrics_output
+    assert f'tenant_id="{event.tenant_id}"' in metrics_output
 
 
 def test_process_ocsf_event_message_runs_graph_flow() -> None:

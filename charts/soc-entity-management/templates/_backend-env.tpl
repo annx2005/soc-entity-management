@@ -75,4 +75,8 @@
   value: {{ .Values.enrichment.cacheTtlSeconds | quote }}
 - name: ENRICHMENT_ENABLED
   value: {{ .Values.enrichment.enabled | quote }}
+- name: METRICS_ENABLED
+  value: {{ .Values.monitoring.enabled | quote }}
+- name: METRICS_PORT
+  value: {{ .Values.monitoring.workerMetricsPort | quote }}
 {{- end -}}

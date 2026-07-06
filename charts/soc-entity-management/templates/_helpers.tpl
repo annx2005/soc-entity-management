@@ -47,6 +47,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- include "soc.fullname" . }}-kafka-graph-worker
 {{- end -}}
 
+{{- define "soc.prometheusName" -}}
+{{- include "soc.fullname" . }}-prometheus
+{{- end -}}
+
+{{- define "soc.grafanaName" -}}
+{{- include "soc.fullname" . }}-grafana
+{{- end -}}
+
+{{- define "soc.kafkaExporterName" -}}
+{{- include "soc.fullname" . }}-kafka-exporter
+{{- end -}}
+
 {{- define "soc.postgresqlName" -}}
 {{- include "soc.fullname" . }}-postgresql
 {{- end -}}

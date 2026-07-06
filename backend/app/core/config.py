@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     enrichment_http_timeout_seconds: float = 5.0
     enrichment_cache_ttl_seconds: int
     enrichment_enabled: bool
+    metrics_enabled: bool = True
+    metrics_port: int = 9100
 
     model_config = SettingsConfigDict(env_file=ROOT_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 

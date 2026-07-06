@@ -8,6 +8,7 @@ from app.enrichment.service import EnrichmentService
 from app.graph.inference import infer_relationships
 from app.graph.repository import GraphRepository
 from app.graph.schemas import EntityResponse, EntityTypeCountResponse, EvidenceResponse, GraphIngestResult, GraphResponse, RelationshipResponse
+from app.observability.metrics import record_entity_upsert, record_graph_event, record_relationship_upsert
 from app.ocsf.schemas import OCSFEvent
 
 
@@ -94,52 +95,59 @@ class GraphService:
         await self._repository.ensure_schema()
 
     async def process_event(self, event: OCSFEvent) -> GraphIngestResult:
-        await self._repository.ensure_schema()
-        await self._repository.upsert_event(event)
+        try:
+            await self._repository.ensure_schema()
+            await self._repository.upsert_event(event)
 
-        entities = extract_entities(event)
-        if self._enrichment_service is not None:
-            entities = await self._enrichment_service.enrich_entities(event.tenant_id, entities)
-        for entity in entities:
-            entity_status = await self._repository.upsert_entity(entity)
-            self._record_graph_audit(
+            entities = extract_entities(event)
+            if self._enrichment_service is not None:
+                entities = await self._enrichment_service.enrich_entities(event.tenant_id, entities)
+            for entity in entities:
+                entity_status = await self._repository.upsert_entity(entity)
+                record_entity_upsert(event.tenant_id, entity.type.value, entity_status)
+                self._record_graph_audit(
+                    tenant_id=event.tenant_id,
+                    action=f"entity_{entity_status}",
+                    target_type="entity",
+                    target_id=entity.id,
+                    metadata={
+                        "event_id": event.event_id,
+                        "entity_type": entity.type.value,
+                        "value": entity.value,
+                        "source": entity.source,
+                    },
+                )
+                await self._repository.upsert_observation(event, entity)
+
+            relationships = infer_relationships(event, entities)
+            for relationship in relationships:
+                relationship_status = await self._repository.upsert_relationship(event.tenant_id, relationship)
+                record_relationship_upsert(event.tenant_id, relationship.relationship_type, relationship_status)
+                self._record_graph_audit(
+                    tenant_id=event.tenant_id,
+                    action=f"relationship_{relationship_status}",
+                    target_type="relationship",
+                    target_id=f"{relationship.relationship_type}:{relationship.from_id}:{relationship.to_id}",
+                    metadata={
+                        "event_id": event.event_id,
+                        "relationship_type": relationship.relationship_type,
+                        "from_id": relationship.from_id,
+                        "to_id": relationship.to_id,
+                        "evidence_ref": relationship.evidence_ref,
+                    },
+                )
+
+            record_graph_event(event.tenant_id, "processed")
+            return GraphIngestResult(
                 tenant_id=event.tenant_id,
-                action=f"entity_{entity_status}",
-                target_type="entity",
-                target_id=entity.id,
-                metadata={
-                    "event_id": event.event_id,
-                    "entity_type": entity.type.value,
-                    "value": entity.value,
-                    "source": entity.source,
-                },
+                event_id=event.event_id,
+                entities=len(entities),
+                observations=len(entities),
+                relationships=len(relationships),
             )
-            await self._repository.upsert_observation(event, entity)
-
-        relationships = infer_relationships(event, entities)
-        for relationship in relationships:
-            relationship_status = await self._repository.upsert_relationship(event.tenant_id, relationship)
-            self._record_graph_audit(
-                tenant_id=event.tenant_id,
-                action=f"relationship_{relationship_status}",
-                target_type="relationship",
-                target_id=f"{relationship.relationship_type}:{relationship.from_id}:{relationship.to_id}",
-                metadata={
-                    "event_id": event.event_id,
-                    "relationship_type": relationship.relationship_type,
-                    "from_id": relationship.from_id,
-                    "to_id": relationship.to_id,
-                    "evidence_ref": relationship.evidence_ref,
-                },
-            )
-
-        return GraphIngestResult(
-            tenant_id=event.tenant_id,
-            event_id=event.event_id,
-            entities=len(entities),
-            observations=len(entities),
-            relationships=len(relationships),
-        )
+        except Exception:
+            record_graph_event(event.tenant_id, "error")
+            raise
 
     async def get_entity(self, tenant_id: str, entity_id: str) -> EntityResponse | None:
         return await self._repository.get_entity(tenant_id, entity_id)
