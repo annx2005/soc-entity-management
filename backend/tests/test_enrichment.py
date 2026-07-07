@@ -7,6 +7,7 @@ import httpx
 from prometheus_client import REGISTRY, generate_latest
 
 from app.entities.schemas import Entity, EntityType
+from app.enrichment.cache import RedisEnrichmentCache
 from app.enrichment.providers import (
     CompositeEnrichmentProvider,
     IpinfoLiteEnrichmentProvider,
@@ -102,6 +103,75 @@ def test_composite_provider_delegates_to_matching_provider() -> None:
     assert hash_result.source == "malwarebazaar"
 
 
+def test_composite_provider_returns_none_and_closes_child_providers() -> None:
+    provider = ClosableProvider({})
+    composite = CompositeEnrichmentProvider([provider])
+
+    result = asyncio.run(composite.lookup(EntityType.IP, "1.1.1.1"))
+    asyncio.run(composite.close())
+
+    assert result is None
+    assert provider.closed is True
+
+
+def test_ipinfo_lite_provider_skips_unsupported_or_missing_token_and_not_found() -> None:
+    called = False
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(404, json={"error": "not found"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider_without_token = IpinfoLiteEnrichmentProvider(token=None, client=client)
+    provider = IpinfoLiteEnrichmentProvider(token="ipinfo-token", client=client)
+
+    try:
+        assert asyncio.run(provider.lookup(EntityType.FILE_HASH, "deadbeef")) is None
+        assert asyncio.run(provider_without_token.lookup(EntityType.IP, "8.8.8.8")) is None
+        assert called is False
+        assert asyncio.run(provider.lookup(EntityType.IP, "8.8.8.8")) is None
+        assert called is True
+    finally:
+        asyncio.run(client.aclose())
+
+
+def test_malware_bazaar_provider_handles_empty_not_found_and_flat_ok_payloads() -> None:
+    responses = [
+        httpx.Response(200, json={"query_status": "hash_not_found"}),
+        httpx.Response(200, json={"query_status": "unknown"}),
+        httpx.Response(
+            200,
+            json={
+                "query_status": "ok",
+                "sha256_hash": "feedface",
+                "signature": "UnitFamily",
+                "file_name": "flat.exe",
+            },
+        ),
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider_without_key = MalwareBazaarEnrichmentProvider(auth_key=None, client=client)
+    provider = MalwareBazaarEnrichmentProvider(auth_key="mb-key", client=client)
+
+    try:
+        assert asyncio.run(provider.lookup(EntityType.IP, "8.8.8.8")) is None
+        assert asyncio.run(provider_without_key.lookup(EntityType.FILE_HASH, "deadbeef")) is None
+        assert asyncio.run(provider.lookup(EntityType.FILE_HASH, "missing")) is None
+        assert asyncio.run(provider.lookup(EntityType.FILE_HASH, "empty")) is None
+        result = asyncio.run(provider.lookup(EntityType.FILE_HASH, "feedface"))
+    finally:
+        asyncio.run(client.aclose())
+
+    assert result is not None
+    assert result.data["malware_family"] == "UnitFamily"
+    assert result.data["file_name"] == "flat.exe"
+
+
 def test_enrichment_service_cache_miss_calls_provider_and_sets_ttl() -> None:
     cache = FakeCache()
     provider = FakeProvider(
@@ -186,6 +256,44 @@ def test_enrichment_service_records_prometheus_metrics() -> None:
     assert 'outcome="success"' in output
 
 
+def test_redis_enrichment_cache_round_trips_result(monkeypatch) -> None:
+    class FakeRedisClient:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+            self.ttls: dict[str, int] = {}
+            self.closed = False
+
+        async def get(self, key: str) -> str | None:
+            return self.values.get(key)
+
+        async def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+            self.values[key] = value
+            self.ttls[key] = ttl_seconds
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fake_client = FakeRedisClient()
+    monkeypatch.setattr("app.enrichment.cache.Redis.from_url", lambda *args, **kwargs: fake_client)
+    cache = RedisEnrichmentCache("redis://unit/0")
+    result = EnrichmentResult(
+        entity_type="ip",
+        value="8.8.8.8",
+        data={"country": "US"},
+        source="unit",
+        cache_status="miss",
+    )
+
+    assert asyncio.run(cache.get("missing")) is None
+    asyncio.run(cache.set("key", result, 123))
+    cached = asyncio.run(cache.get("key"))
+    asyncio.run(cache.close())
+
+    assert cached == result
+    assert fake_client.ttls == {"key": 123}
+    assert fake_client.closed is True
+
+
 def make_entity(entity_type: EntityType, value: str, properties: dict[str, Any] | None = None) -> Entity:
     return Entity(
         id=f"{entity_type.value}:{value}",
@@ -216,6 +324,15 @@ class FakeProvider:
             source=str(data.get("provider") or "fake"),
             cache_status="miss",
         )
+
+
+class ClosableProvider(FakeProvider):
+    def __init__(self, results: dict[tuple[EntityType, str], dict[str, Any]]) -> None:
+        super().__init__(results)
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class FakeCache:

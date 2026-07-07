@@ -714,14 +714,6 @@ def _promoted_properties(entity: Entity) -> dict[str, Any]:
         return {"domain": entity.properties.get("domain")}
     if entity.type == EntityType.CVE:
         return {"year": entity.properties.get("year")}
-    if entity.type == EntityType.CLOUD_RESOURCE:
-        return {
-            "provider": entity.properties.get("provider"),
-            "account_id": entity.properties.get("account_id"),
-            "region": entity.properties.get("region"),
-            "resource_type": entity.properties.get("resource_type"),
-            "service": entity.properties.get("service"),
-        }
     return {}
 
 

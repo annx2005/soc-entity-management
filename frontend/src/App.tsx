@@ -87,7 +87,6 @@ const TYPE_LABELS: Record<string, string> = {
   url: "URL",
   email: "Email",
   cve: "CVE",
-  cloud_resource: "Cloud resource",
 };
 
 const ENTITY_PAGE_SIZE = 25;

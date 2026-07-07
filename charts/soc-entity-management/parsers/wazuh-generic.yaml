@@ -1,0 +1,68 @@
+id: wazuh-generic
+display_name: Wazuh Generic
+description: Generic fallback for valid Wazuh archive records without a specialized parser.
+category: siem
+enabled: true
+public: false
+priority: 1
+match:
+  all:
+    - exists: agent.name
+    - exists: decoder.name
+ocsf:
+  event_id:
+    hash_paths: [id, timestamp, decoder.name, location, full_log]
+  time:
+    path: timestamp
+  tenant_id:
+    path: tenant_id
+    transforms: [normalize_empty]
+  source_name:
+    value: wazuh
+  event_type:
+    path: decoder.name
+    transforms: [normalize_empty]
+  class_uid:
+    value: 2001
+  class_name:
+    value: Security Finding
+  category_uid:
+    value: 2
+  category_name:
+    value: Findings
+  activity_id:
+    value: 1
+  activity_name:
+    value: Create
+  severity_id:
+    value: 1
+  fields:
+    device.hostname:
+      path: agent.name
+      transforms: [normalize_empty]
+    src_endpoint.ip:
+      path: agent.ip
+      transforms: [normalize_empty]
+    finding.uid:
+      path: id
+      transforms: [string]
+    finding.title:
+      first:
+        - path: rule.description
+          transforms: [normalize_empty]
+        - path: decoder.name
+          transforms: [normalize_empty]
+    finding.desc:
+      first:
+        - path: rule.description
+          transforms: [normalize_empty]
+        - path: full_log
+          transforms: [normalize_empty]
+  unmapped:
+    decoder:
+      path: decoder.name
+    location:
+      path: location
+    rule_id:
+      path: rule.id
+      transforms: [string]

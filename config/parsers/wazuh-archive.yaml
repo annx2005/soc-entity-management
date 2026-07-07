@@ -1,0 +1,17 @@
+id: wazuh-archive
+display_name: Wazuh Archive
+description: Mixed Wazuh archive records, including alerts, Windows eventchannel, and syscollector records.
+category: siem
+enabled: true
+priority: 100
+match:
+  all:
+    - exists: agent.name
+    - exists: decoder.name
+dispatch:
+  parsers:
+    - wazuh-vulnerability
+    - wazuh-alert
+    - wazuh-sysmon
+    - wazuh-syscollector-process
+    - wazuh-generic

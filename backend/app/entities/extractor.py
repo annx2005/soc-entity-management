@@ -120,15 +120,6 @@ def extract_entities(event: OCSFEvent) -> list[Entity]:
             {"source_field": source_field, "year": _cve_year(cve)},
         )
 
-    for source_field, resource in _iter_cloud_resources(event):
-        cloud_resource = _normalize_cloud_resource(resource, _as_dict(getattr(event, "cloud", None)))
-        if cloud_resource is not None:
-            add_entity(
-                EntityType.CLOUD_RESOURCE,
-                cloud_resource["value"],
-                {"source_field": source_field, **cloud_resource["properties"]},
-            )
-
     for source_field, process in _iter_processes(event):
         process_entity = _normalize_process(process)
         if process_entity is not None:
@@ -313,20 +304,6 @@ def _iter_cve_values(event: OCSFEvent) -> Iterable[tuple[str, Any]]:
             yield f"finding.{field}", cve
 
 
-def _iter_cloud_resources(event: OCSFEvent) -> Iterable[tuple[str, dict[str, Any]]]:
-    resource = _as_dict(getattr(event, "resource", None))
-    if resource:
-        yield "resource", resource
-
-    for index, item in enumerate(_as_list(getattr(event, "resources", None))):
-        if isinstance(item, dict):
-            yield f"resources[{index}]", item
-
-    cloud_resource = _as_dict(_as_dict(getattr(event, "cloud", None)).get("resource"))
-    if cloud_resource:
-        yield "cloud.resource", cloud_resource
-
-
 def _iter_scalar_or_list(value: Any) -> Iterable[Any]:
     if isinstance(value, list):
         yield from value
@@ -401,35 +378,6 @@ def _cve_year(value: str | None) -> int | None:
         return int(value.split("-")[1])
     except (IndexError, ValueError):
         return None
-
-
-def _normalize_cloud_resource(resource: dict[str, Any], cloud: dict[str, Any]) -> dict[str, Any] | None:
-    value = None
-    id_field = None
-    for field in ("uid", "arn", "resource_id", "id", "name"):
-        value = _clean_text(resource.get(field))
-        if value:
-            id_field = field
-            break
-    if value is None:
-        return None
-
-    provider = _clean_text(resource.get("provider") or cloud.get("provider"))
-    account_id = _clean_text(resource.get("account_id") or cloud.get("account_id"))
-    region = _clean_text(resource.get("region") or cloud.get("region"))
-    resource_type = _clean_text(resource.get("type") or resource.get("resource_type") or resource.get("service"))
-    service = _clean_text(resource.get("service"))
-
-    properties = {
-        "id_field": id_field,
-        "provider": provider.lower() if provider else None,
-        "account_id": account_id,
-        "region": region,
-        "resource_type": resource_type.lower() if resource_type else None,
-        "service": service.lower() if service else None,
-        "name": _clean_text(resource.get("name")),
-    }
-    return {"value": value.strip(), "properties": {key: item for key, item in properties.items() if item is not None}}
 
 
 def _iter_processes(event: OCSFEvent) -> Iterable[tuple[str, dict[str, Any]]]:

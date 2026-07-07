@@ -17,6 +17,8 @@ def test_list_parsers_requires_auth_context_and_returns_configs() -> None:
     assert response.status_code == 200
     parser_ids = {item["id"] for item in response.json()}
     assert "sysmon" in parser_ids
+    assert "wazuh-archive" in parser_ids
+    assert "wazuh-alert" not in parser_ids
 
 
 def test_preview_parser_allows_analyst() -> None:

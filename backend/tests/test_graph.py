@@ -55,6 +55,8 @@ def test_graph_allowlists_reject_unknown_dynamic_values() -> None:
 
     with pytest.raises(ValueError):
         validate_relationship_type("MATCH (n) DETACH DELETE n")
+    with pytest.raises(ValueError):
+        label_for_entity_type("unknown")  # type: ignore[arg-type]
 
 
 def test_merge_properties_preserves_existing_values_and_unions_source_fields() -> None:
@@ -290,7 +292,6 @@ def test_infer_relationships_for_advanced_entity_types() -> None:
         actor={"user": {"name": "alice", "email": "alice@example.com"}},
         device={"hostname": "host-a"},
         process={"file": {"path": r"C:\Tools\curl.exe"}, "cmd_line": "curl https://api.example.com/a"},
-        resource={"arn": "arn:aws:s3:::bucket-a", "provider": "aws", "service": "s3", "type": "bucket"},
     )
 
     relationships = infer_relationships(event, extract_entities(event))
@@ -300,7 +301,6 @@ def test_infer_relationships_for_advanced_entity_types() -> None:
         "RAN_AS",
         "USER_HAS_EMAIL",
         "PROCESS_ACCESSED_URL",
-        "ACCESSED_CLOUD_RESOURCE",
     }.issubset({relationship.relationship_type for relationship in relationships})
 
 

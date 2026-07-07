@@ -13,7 +13,6 @@ LABEL_BY_ENTITY_TYPE: dict[EntityType, str] = {
     EntityType.URL: "URL",
     EntityType.EMAIL: "Email",
     EntityType.CVE: "CVE",
-    EntityType.CLOUD_RESOURCE: "CloudResource",
 }
 
 ALLOWED_RELATIONSHIP_TYPES = {
@@ -31,7 +30,6 @@ ALLOWED_RELATIONSHIP_TYPES = {
     "USER_HAS_EMAIL",
     "PROCESS_ACCESSED_URL",
     "EMAIL_SENT_TO",
-    "ACCESSED_CLOUD_RESOURCE",
     "AFFECTED_BY_CVE",
 }
 

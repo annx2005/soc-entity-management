@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
+import math
 import random
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -22,7 +24,6 @@ ENTITY_TYPES = (
     "url",
     "email",
     "cve",
-    "cloud_resource",
 )
 RELATIONSHIP_TYPES = (
     "LOGGED_IN_TO",
@@ -39,7 +40,6 @@ RELATIONSHIP_TYPES = (
     "USER_HAS_EMAIL",
     "PROCESS_ACCESSED_URL",
     "EMAIL_SENT_TO",
-    "ACCESSED_CLOUD_RESOURCE",
     "AFFECTED_BY_CVE",
 )
 
@@ -62,6 +62,7 @@ def main() -> None:
                 "entities": manifest["unique_entities"],
                 "relationships": manifest["unique_relationships"],
                 "events": manifest["events"],
+                "tenant_outputs": manifest.get("tenant_outputs", {}),
             },
             indent=2,
             sort_keys=True,
@@ -74,7 +75,7 @@ def generate_dataset(
     output_path: Path = DEFAULT_OUTPUT,
     manifest_path: Path = DEFAULT_MANIFEST,
     seed: int = 424242,
-    tenants: int = 2,
+    tenants: int = 1,
     entity_target: int = 12000,
     relationship_target: int = 1_000_000,
 ) -> dict[str, Any]:
@@ -89,6 +90,7 @@ def generate_dataset(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    tenant_output_paths = _tenant_output_paths(output_path, tenant_ids)
 
     entity_keys = {(tenant_id, entity_type, value) for tenant_id, by_type in pools.items() for entity_type, values in by_type.items() for value in values}
     relationship_keys: set[tuple[str, str, str, str]] = set()
@@ -98,45 +100,70 @@ def generate_dataset(
         entity_counts[entity_type] += 1
 
     base_time = datetime(2026, 7, 7, tzinfo=timezone.utc)
-    attempts = 0
+    relationship_target_by_tenant = _allocate_targets(
+        relationship_target,
+        tenant_ids,
+        {tenant_id: _tenant_relationship_capacity(pools[tenant_id]) for tenant_id in tenant_ids},
+    )
+    relationship_target_by_tenant_type = {
+        tenant_id: _allocate_targets(
+            relationship_target_by_tenant[tenant_id],
+            list(RELATIONSHIP_TYPES),
+            {
+                relationship_type: _relationship_type_capacity(pools[tenant_id], relationship_type)
+                for relationship_type in RELATIONSHIP_TYPES
+            },
+        )
+        for tenant_id in tenant_ids
+    }
     event_index = 0
-    with output_path.open("w", encoding="utf-8") as stream:
-        while len(relationship_keys) < relationship_target:
-            relationship_type = RELATIONSHIP_TYPES[event_index % len(RELATIONSHIP_TYPES)]
-            tenant_id = tenant_ids[event_index % len(tenant_ids)]
-            source_type, target_type = _relationship_entity_types(relationship_type)
-            source = _pick(pools[tenant_id][source_type], event_index, 17)
-            target = _pick(pools[tenant_id][target_type], event_index, 43)
-            if source == target:
-                attempts += 1
-                event_index += 1
-                continue
-
-            key = (tenant_id, relationship_type, f"{source_type}:{source}", f"{target_type}:{target}")
-            if key in relationship_keys:
-                attempts += 1
-                if attempts > relationship_target * 20:
-                    raise ValueError("relationship target could not be reached with deterministic pool selection")
-                event_index += 1
-                continue
-
-            relationship_keys.add(key)
-            relationship_counts[relationship_type] += 1
-            event = _event_for_relationship(
-                tenant_id=tenant_id,
-                event_id=f"bench-{event_index:09d}",
-                relationship_type=relationship_type,
-                source=source,
-                target=target,
-                observed_at=base_time + timedelta(seconds=event_index),
-            )
-            stream.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
-            event_index += 1
+    tenant_event_counts = {tenant_id: 0 for tenant_id in tenant_ids}
+    with ExitStack() as stack:
+        combined_stream = stack.enter_context(output_path.open("w", encoding="utf-8"))
+        tenant_streams = {
+            tenant_id: combined_stream
+            if tenant_output_paths[tenant_id] == output_path
+            else stack.enter_context(tenant_output_paths[tenant_id].open("w", encoding="utf-8"))
+            for tenant_id in tenant_ids
+        }
+        for tenant_id in tenant_ids:
+            for relationship_type in RELATIONSHIP_TYPES:
+                target_count = relationship_target_by_tenant_type[tenant_id][relationship_type]
+                if target_count == 0:
+                    continue
+                source_type, target_type = _relationship_entity_types(relationship_type)
+                pairs = _unique_relationship_pairs(
+                    pools[tenant_id][source_type],
+                    pools[tenant_id][target_type],
+                    count=target_count,
+                    same_pool=source_type == target_type,
+                    seed=seed + _stable_seed_offset(tenant_id, relationship_type),
+                )
+                for source, target in pairs:
+                    key = (tenant_id, relationship_type, f"{source_type}:{source}", f"{target_type}:{target}")
+                    relationship_keys.add(key)
+                    relationship_counts[relationship_type] += 1
+                    event = _event_for_relationship(
+                        tenant_id=tenant_id,
+                        event_id=f"bench-{event_index:09d}",
+                        relationship_type=relationship_type,
+                        source=source,
+                        target=target,
+                        observed_at=base_time + timedelta(seconds=event_index),
+                    )
+                    line = json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+                    combined_stream.write(line)
+                    if tenant_streams[tenant_id] is not combined_stream:
+                        tenant_streams[tenant_id].write(line)
+                    event_index += 1
+                    tenant_event_counts[tenant_id] += 1
 
     manifest = {
         "seed": seed,
         "tenants": tenant_ids,
         "output": str(output_path),
+        "tenant_outputs": {tenant_id: str(path) for tenant_id, path in tenant_output_paths.items()},
+        "tenant_event_counts": tenant_event_counts,
         "events": event_index,
         "unique_entities": len(entity_keys),
         "unique_relationships": len(relationship_keys),
@@ -164,21 +191,25 @@ def _build_entity_pools(tenant_ids: list[str], entity_target: int, rng: random.R
             "url": [f"https://service-{tenant_index:02d}-{index:05d}.example.net/api/{index}" for index in range(per_type)],
             "email": [f"user{tenant_index:02d}-{index:05d}@example.net" for index in range(per_type)],
             "cve": [f"CVE-2026-{10000 + index}" for index in range(per_type)],
-            "cloud_resource": [
-                f"arn:aws:ec2:us-east-1:{100000000000 + tenant_index}:instance/i-{tenant_index:02d}{index:010d}"
-                for index in range(per_type)
-            ],
         }
     return pools
 
 
 def _relationship_capacity(pools: dict[str, dict[str, list[str]]]) -> int:
-    total = 0
-    for by_type in pools.values():
-        for relationship_type in RELATIONSHIP_TYPES:
-            source_type, target_type = _relationship_entity_types(relationship_type)
-            total += len(by_type[source_type]) * len(by_type[target_type])
-    return total
+    return sum(_tenant_relationship_capacity(by_type) for by_type in pools.values())
+
+
+def _tenant_relationship_capacity(by_type: dict[str, list[str]]) -> int:
+    return sum(_relationship_type_capacity(by_type, relationship_type) for relationship_type in RELATIONSHIP_TYPES)
+
+
+def _relationship_type_capacity(by_type: dict[str, list[str]], relationship_type: str) -> int:
+    source_type, target_type = _relationship_entity_types(relationship_type)
+    source_count = len(by_type[source_type])
+    target_count = len(by_type[target_type])
+    if source_type == target_type:
+        return source_count * max(target_count - 1, 0)
+    return source_count * target_count
 
 
 def _relationship_entity_types(relationship_type: str) -> tuple[str, str]:
@@ -197,7 +228,6 @@ def _relationship_entity_types(relationship_type: str) -> tuple[str, str]:
         "USER_HAS_EMAIL": ("user", "email"),
         "PROCESS_ACCESSED_URL": ("process", "url"),
         "EMAIL_SENT_TO": ("email", "email"),
-        "ACCESSED_CLOUD_RESOURCE": ("process", "cloud_resource"),
         "AFFECTED_BY_CVE": ("host", "cve"),
     }[relationship_type]
 
@@ -234,8 +264,6 @@ def _event_for_relationship(
         event.update(_process_fields(source, url=target))
     elif relationship_type == "EMAIL_SENT_TO":
         event.update(_finding_fields(email_from=source, email_to=target))
-    elif relationship_type == "ACCESSED_CLOUD_RESOURCE":
-        event.update(_process_fields(source, cloud_resource=target))
     elif relationship_type == "AFFECTED_BY_CVE":
         event.update(_vulnerability_fields(source, target))
     return event
@@ -321,7 +349,6 @@ def _process_fields(
     user: str | None = None,
     file_hash: str | None = None,
     url: str | None = None,
-    cloud_resource: str | None = None,
 ) -> dict[str, Any]:
     process_obj: dict[str, Any] = {"file": {"path": process, "name": Path(process).name}}
     if url:
@@ -341,8 +368,6 @@ def _process_fields(
         "actor": {"user": {"name": user}, "process": process_obj} if user else {"process": process_obj},
         "process": process_obj,
     }
-    if cloud_resource:
-        event["resource"] = {"arn": cloud_resource, "provider": "aws", "service": "ec2", "type": "instance", "region": "us-east-1"}
     return event
 
 
@@ -369,12 +394,107 @@ def _hash_value(tenant_index: int, index: int, rng: random.Random) -> str:
     return f"{tenant_index:02x}{index:014x}{rng.getrandbits(192):048x}"[:64]
 
 
+def _stable_seed_offset(*parts: str) -> int:
+    return sum((index + 1) * sum(ord(char) for char in part) for index, part in enumerate(parts))
+
+
+def _tenant_output_paths(output_path: Path, tenant_ids: list[str]) -> dict[str, Path]:
+    if len(tenant_ids) == 1:
+        return {tenant_ids[0]: output_path}
+    return {
+        tenant_id: output_path.with_name(f"{output_path.stem}-{tenant_id}{output_path.suffix}")
+        for tenant_id in tenant_ids
+    }
+
+
+def _allocate_targets(total: int, keys: list[str], capacities: dict[str, int]) -> dict[str, int]:
+    if total < 0:
+        raise ValueError("target must be >= 0")
+    if total > sum(capacities[key] for key in keys):
+        raise ValueError(f"target {total} exceeds available capacity {sum(capacities[key] for key in keys)}")
+    if not keys:
+        return {}
+
+    targets = {key: 0 for key in keys}
+    remaining = total
+    while remaining > 0:
+        progressed = False
+        for key in keys:
+            if remaining == 0:
+                break
+            if targets[key] >= capacities[key]:
+                continue
+            targets[key] += 1
+            remaining -= 1
+            progressed = True
+        if not progressed:
+            break
+    return targets
+
+
+def _unique_relationship_pairs(
+    sources: list[str],
+    targets: list[str],
+    *,
+    count: int,
+    same_pool: bool,
+    seed: int,
+) -> list[tuple[str, str]]:
+    if count == 0:
+        return []
+    if same_pool:
+        capacity = len(sources) * max(len(sources) - 1, 0)
+        if count > capacity:
+            raise ValueError(f"relationship target {count} exceeds same-pool capacity {capacity}")
+        return _unique_same_pool_pairs(sources, count, seed)
+
+    capacity = len(sources) * len(targets)
+    if count > capacity:
+        raise ValueError(f"relationship target {count} exceeds pair capacity {capacity}")
+    step = _coprime_step(capacity, seed)
+    start = seed % capacity
+    pairs: list[tuple[str, str]] = []
+    for ordinal in range(count):
+        flat_index = (start + (ordinal * step)) % capacity
+        source_index = flat_index // len(targets)
+        target_index = flat_index % len(targets)
+        pairs.append((sources[source_index], targets[target_index]))
+    return pairs
+
+
+def _unique_same_pool_pairs(values: list[str], count: int, seed: int) -> list[tuple[str, str]]:
+    size = len(values)
+    if size < 2:
+        raise ValueError("same-pool relationships require at least 2 values")
+    offset_step = _coprime_step(size - 1, seed + size)
+    source_step = _coprime_step(size, seed + (size * 3))
+    start = seed % size
+    pairs: list[tuple[str, str]] = []
+    for ordinal in range(count):
+        source_index = (start + (ordinal * source_step)) % size
+        offset = 1 + (((ordinal // size) * offset_step) % (size - 1))
+        target_index = (source_index + offset) % size
+        pairs.append((values[source_index], values[target_index]))
+    return pairs
+
+
+def _coprime_step(modulus: int, seed: int) -> int:
+    if modulus <= 1:
+        return 1
+    candidate = max(1, seed % modulus)
+    while math.gcd(candidate, modulus) != 1:
+        candidate += 1
+        if candidate >= modulus:
+            candidate = 1
+    return candidate
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a reproducible large OCSF benchmark dataset.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument("--seed", type=int, default=424242)
-    parser.add_argument("--tenants", type=int, default=2)
+    parser.add_argument("--tenants", type=int, default=1)
     parser.add_argument("--entity-target", type=int, default=12000)
     parser.add_argument("--relationship-target", type=int, default=1_000_000)
     return parser.parse_args()

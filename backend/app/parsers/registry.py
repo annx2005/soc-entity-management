@@ -32,7 +32,10 @@ class ConfigParser:
         self.category = str(config.get("category") or "custom")
         self.description = config.get("description")
         self.enabled = bool(config.get("enabled", True))
+        self.public = bool(config.get("public", True))
         self.priority = int(config.get("priority", 0))
+        dispatch = config.get("dispatch") or {}
+        self.dispatch_parser_ids = [str(parser_id) for parser_id in dispatch.get("parsers", [])]
 
     def summary(self) -> ParserSummary:
         return ParserSummary(
@@ -108,7 +111,7 @@ class ConfigParser:
 class ParserRegistry:
     def __init__(self, parsers: Iterable[ConfigParser]):
         enabled = [parser for parser in parsers if parser.enabled]
-        self._parsers = sorted(enabled, key=lambda parser: parser.priority, reverse=True)
+        self._parsers = sorted([parser for parser in enabled if parser.public], key=lambda parser: parser.priority, reverse=True)
         self._by_id = {parser.id: parser for parser in enabled}
 
     def list(self) -> list[ParserSummary]:
@@ -122,12 +125,26 @@ class ParserRegistry:
                 raise UnsupportedEventError(f"parser_not_found: {parser_id}")
             if not parser.matches(record):
                 raise UnsupportedEventError(f"parser_no_match: {parser_id}")
-            return parser.normalize(record)
+            return self._normalize_with_parser(record, parser)
 
         for parser in self._parsers:
             if parser.matches(record):
-                return parser.normalize(record)
+                return self._normalize_with_parser(record, parser)
         raise UnsupportedEventError("parser_no_match: auto")
+
+    def _normalize_with_parser(self, record: dict[str, Any], parser: ConfigParser) -> OCSFEvent:
+        if not parser.dispatch_parser_ids:
+            return parser.normalize(record)
+
+        for parser_id in parser.dispatch_parser_ids:
+            target = self._by_id.get(parser_id)
+            if target is None or not target.matches(record):
+                continue
+            event = self._normalize_with_parser(record, target)
+            event.unmapped["parser_id"] = parser.id
+            event.unmapped["dispatched_parser_id"] = target.id
+            return event
+        raise UnsupportedEventError(f"parser_no_match: {parser.id}")
 
 
 _REGISTRY: ParserRegistry | None = None
@@ -228,6 +245,8 @@ def _transform(value: Any, transform: str) -> Any:
     if transform == "sha256_hashes":
         sha256 = parse_sha256(value)
         return [{"algorithm": "SHA256", "value": sha256}] if sha256 else None
+    if transform == "wazuh_vulnerability":
+        return _wazuh_vulnerability(value)
     if transform == "process_name":
         return process_name_from_path(str(value)) if value else None
     if transform == "severity_id":
@@ -305,6 +324,21 @@ def _dotnet_json_date(value: Any) -> str | None:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
 
 
+def _wazuh_vulnerability(value: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(value, dict):
+        return None
+    vulnerability = {
+        "cve": normalize_empty(value.get("cve")),
+        "package_name": normalize_empty(get_nested(value, "package.name")),
+        "severity": normalize_empty(value.get("severity")),
+        "status": normalize_empty(value.get("status")),
+        "title": normalize_empty(value.get("title")),
+        "description": normalize_empty(value.get("reference")),
+    }
+    cleaned = {key: item for key, item in vulnerability.items() if item not in (None, "", [], {})}
+    return [cleaned] if cleaned else None
+
+
 SYSMON_EVENT_MAP: dict[int, dict[str, Any]] = {
     1: {
         "class_uid": 1007,
@@ -323,6 +357,15 @@ SYSMON_EVENT_MAP: dict[int, dict[str, Any]] = {
         "activity_id": 1,
         "activity_name": "Connection",
         "event_type": "network_connection",
+    },
+    10: {
+        "class_uid": 1007,
+        "class_name": "Process Activity",
+        "category_uid": 1,
+        "category_name": "System Activity",
+        "activity_id": 6,
+        "activity_name": "Access",
+        "event_type": "process_access",
     },
     11: {
         "class_uid": 1001,

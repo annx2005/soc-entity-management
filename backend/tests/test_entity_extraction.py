@@ -146,22 +146,14 @@ def test_extracts_url_from_command_line_and_normalizes_canonical_form() -> None:
     assert urls[0].properties["source_field"] == "process.cmd_line"
 
 
-def test_extracts_email_cve_and_cloud_resource_from_normalized_fields() -> None:
+def test_extracts_email_and_cve_from_normalized_fields() -> None:
     event = make_empty_event(
         actor={"user": {"email": "Analyst@Example.COM"}},
         finding={"desc": "Exploit observed for cve-2026-41611"},
-        cloud={"provider": "AWS", "account_id": "123456789012", "region": "ap-southeast-1"},
-        resource={"arn": "arn:aws:s3:::soc-logs", "type": "S3_Bucket", "name": "soc-logs"},
     )
 
     assert entity_values(event, EntityType.EMAIL) == {"analyst@example.com"}
     assert entity_values(event, EntityType.CVE) == {"CVE-2026-41611"}
-
-    cloud_resources = [entity for entity in extract_entities(event) if entity.type == EntityType.CLOUD_RESOURCE]
-    assert [entity.value for entity in cloud_resources] == ["arn:aws:s3:::soc-logs"]
-    assert cloud_resources[0].properties["provider"] == "aws"
-    assert cloud_resources[0].properties["account_id"] == "123456789012"
-    assert cloud_resources[0].properties["resource_type"] == "s3_bucket"
 
 
 def test_extracts_cve_from_vulnerability_finding() -> None:

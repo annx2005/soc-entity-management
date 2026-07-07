@@ -8,7 +8,6 @@ export type EntityType =
   | 'url'
   | 'email'
   | 'cve'
-  | 'cloud_resource'
 
 export type TenantContext = {
   account_id: string
@@ -148,5 +147,4 @@ export const ENTITY_TYPES: EntityType[] = [
   'url',
   'email',
   'cve',
-  'cloud_resource',
 ]

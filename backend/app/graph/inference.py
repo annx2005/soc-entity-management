@@ -45,8 +45,6 @@ def infer_relationships(event: OCSFEvent, entities: list[Entity]) -> list[Relati
             add("USED_IP", host, ip_entity)
         for ip_entity in _by_type_and_field(entities, EntityType.IP, "dst_endpoint.ip"):
             add("CONNECTED_TO", host, ip_entity)
-        for cloud_resource in _by_type(entities, EntityType.CLOUD_RESOURCE):
-            add("ACCESSED_CLOUD_RESOURCE", host, cloud_resource)
 
     elif event.class_uid == 4003:
         host = _first_by_type(entities, EntityType.HOST, "device.hostname")
@@ -67,16 +65,12 @@ def infer_relationships(event: OCSFEvent, entities: list[Entity]) -> list[Relati
             add("HAS_HASH", process, file_hash)
         for url in _by_type(entities, EntityType.URL):
             add("PROCESS_ACCESSED_URL", process, url)
-        for cloud_resource in _by_type(entities, EntityType.CLOUD_RESOURCE):
-            add("ACCESSED_CLOUD_RESOURCE", process, cloud_resource)
         _add_user_email_relationships(add, user, entities)
 
     elif event.class_uid in {2001, 2002}:
         host = _first_by_type(entities, EntityType.HOST, "device.hostname")
         for cve in _by_type(entities, EntityType.CVE):
             add("AFFECTED_BY_CVE", host, cve)
-        for cloud_resource in _by_type(entities, EntityType.CLOUD_RESOURCE):
-            add("ACCESSED_CLOUD_RESOURCE", host, cloud_resource)
 
     if _by_type(entities, EntityType.EMAIL):
         sender = _first_by_type(entities, EntityType.EMAIL, "email.from") or _first_by_type(entities, EntityType.EMAIL, "email.sender")

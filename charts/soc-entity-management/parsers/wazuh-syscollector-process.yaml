@@ -1,0 +1,70 @@
+id: wazuh-syscollector-process
+display_name: Wazuh Syscollector Process
+description: Wazuh syscollector process inventory records from archives.
+category: siem
+enabled: true
+public: false
+priority: 80
+match:
+  all:
+    - equals:
+        path: decoder.name
+        value: syscollector
+    - equals:
+        path: data.type
+        value: dbsync_processes
+    - exists: data.process.name
+ocsf:
+  event_id:
+    hash_paths: [id, timestamp, data.process.pid, data.process.name, data.operation_type]
+  time:
+    path: timestamp
+  tenant_id:
+    path: tenant_id
+    transforms: [normalize_empty]
+  source_name:
+    value: wazuh_syscollector
+  event_type:
+    value: process_inventory
+  class_uid:
+    value: 1007
+  class_name:
+    value: Process Activity
+  category_uid:
+    value: 1
+  category_name:
+    value: System Activity
+  activity_id:
+    value: 99
+  activity_name:
+    value: Inventory
+  severity_id:
+    value: 1
+  fields:
+    device.hostname:
+      path: agent.name
+      transforms: [normalize_empty]
+    src_endpoint.ip:
+      path: agent.ip
+      transforms: [normalize_empty]
+    process.name:
+      path: data.process.name
+      transforms: [normalize_empty]
+    process.cmd_line:
+      path: data.process.cmd
+      transforms: [normalize_empty]
+    process.file.path:
+      path: data.process.name
+      transforms: [normalize_empty]
+    process.file.name:
+      path: data.process.name
+      transforms: [process_name]
+  unmapped:
+    decoder:
+      path: decoder.name
+    operation_type:
+      path: data.operation_type
+    process_pid:
+      path: data.process.pid
+    process_ppid:
+      path: data.process.ppid

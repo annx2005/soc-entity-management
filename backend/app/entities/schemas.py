@@ -16,7 +16,6 @@ class EntityType(str, enum.Enum):
     URL = "url"
     EMAIL = "email"
     CVE = "cve"
-    CLOUD_RESOURCE = "cloud_resource"
 
 
 class Entity(BaseModel):

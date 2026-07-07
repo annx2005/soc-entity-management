@@ -10,6 +10,19 @@ type GraphViewProps = {
   selectedEntity?: Entity | null
 }
 
+type RenderableGraph = {
+  graph: GraphResponse | null
+  hiddenEdges: number
+  hiddenNodes: number
+  totalEdges: number
+  totalNodes: number
+}
+
+const MAX_RENDER_NODES = 72
+const MAX_RENDER_EDGES = 90
+const MAX_PRIMARY_NEIGHBORS = 36
+const MAX_SECONDARY_EDGES = 42
+
 const TYPE_COLORS: Record<string, string> = {
   user: '#2f7d5f',
   host: '#8a5a1f',
@@ -20,7 +33,6 @@ const TYPE_COLORS: Record<string, string> = {
   url: '#2d6a9f',
   email: '#b35b2e',
   cve: '#8f4b66',
-  cloud_resource: '#6a6f25',
 }
 
 export function GraphView({ graph, selectedEntityId, selectedEntity = null }: GraphViewProps) {
@@ -30,11 +42,12 @@ export function GraphView({ graph, selectedEntityId, selectedEntity = null }: Gr
     () => (graph && graph.nodes.length > 0 ? graph : selectedEntity ? graphFromEntity(selectedEntity) : graph),
     [graph, selectedEntity],
   )
+  const renderableGraph = useMemo(() => limitGraph(displayGraph, selectedEntityId), [displayGraph, selectedEntityId])
 
   useEffect(() => {
     if (!containerRef.current) return
 
-    const elements = toElements(displayGraph)
+    const elements = toElements(renderableGraph.graph)
     cyRef.current?.destroy()
 
     const cy = cytoscape({
@@ -123,7 +136,7 @@ export function GraphView({ graph, selectedEntityId, selectedEntity = null }: Gr
       ],
       layout: {
         name: 'preset',
-        positions: buildPositions(displayGraph, selectedEntityId),
+        positions: buildPositions(renderableGraph.graph, selectedEntityId),
         fit: false,
       },
     })
@@ -146,23 +159,35 @@ export function GraphView({ graph, selectedEntityId, selectedEntity = null }: Gr
       }
     })
 
-    cy.fit(undefined, 48)
+    cy.fit(undefined, 56)
     cyRef.current = cy
 
     return () => {
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
     }
-  }, [displayGraph, selectedEntityId])
+  }, [renderableGraph.graph, selectedEntityId])
 
-  if (!displayGraph || displayGraph.nodes.length === 0) {
+  if (!renderableGraph.graph || renderableGraph.graph.nodes.length === 0) {
     return <div className="graph-empty">No graph data</div>
   }
 
+  const hasHiddenGraphItems = renderableGraph.hiddenNodes > 0 || renderableGraph.hiddenEdges > 0
+
   return (
     <div className="graph-shell">
+      {hasHiddenGraphItems ? (
+        <div className="graph-density">
+          <strong>
+            {renderableGraph.graph.nodes.length}/{renderableGraph.totalNodes} nodes
+          </strong>
+          <span>
+            {renderableGraph.graph.edges.length}/{renderableGraph.totalEdges} relationships
+          </span>
+        </div>
+      ) : null}
       <div className="graph-toolbar">
-        <button type="button" className="ghost-button graph-tool" onClick={() => cyRef.current?.fit(undefined, 48)}>
+        <button type="button" className="ghost-button graph-tool" onClick={() => cyRef.current?.fit(undefined, 56)}>
           <MoveDiagonal2 size={14} />
           <span>Fit</span>
         </button>
@@ -174,6 +199,87 @@ export function GraphView({ graph, selectedEntityId, selectedEntity = null }: Gr
       <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
     </div>
   )
+}
+
+function limitGraph(graph: GraphResponse | null, selectedEntityId: string | null): RenderableGraph {
+  if (!graph) {
+    return { graph, hiddenEdges: 0, hiddenNodes: 0, totalEdges: 0, totalNodes: 0 }
+  }
+
+  const totalNodes = graph.nodes.length
+  const totalEdges = graph.edges.length
+  if (totalNodes <= MAX_RENDER_NODES && totalEdges <= MAX_RENDER_EDGES) {
+    return { graph, hiddenEdges: 0, hiddenNodes: 0, totalEdges, totalNodes }
+  }
+
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]))
+  const selectedNode =
+    graph.nodes.find((node) => stringValue(node.properties.id) === selectedEntityId) ??
+    graph.nodes.find((node) => node.labels.includes('Entity')) ??
+    graph.nodes[0]
+  const selectedNodeId = selectedNode?.id
+
+  const visibleNodeIds = new Set<string>()
+  const visibleEdgeIds = new Set<string>()
+
+  function canAddNode(nodeId: string): boolean {
+    return visibleNodeIds.has(nodeId) || visibleNodeIds.size < MAX_RENDER_NODES
+  }
+
+  function addEdge(edge: GraphResponse['edges'][number]): boolean {
+    if (visibleEdgeIds.has(edge.id) || visibleEdgeIds.size >= MAX_RENDER_EDGES) return false
+    if (!nodeById.has(edge.start_id) || !nodeById.has(edge.end_id)) return false
+    if (!canAddNode(edge.start_id) || !canAddNode(edge.end_id)) return false
+    visibleNodeIds.add(edge.start_id)
+    visibleNodeIds.add(edge.end_id)
+    visibleEdgeIds.add(edge.id)
+    return true
+  }
+
+  if (selectedNodeId) {
+    visibleNodeIds.add(selectedNodeId)
+    const primaryEdges = graph.edges
+      .filter((edge) => edge.start_id === selectedNodeId || edge.end_id === selectedNodeId)
+      .sort(compareEdges)
+    for (const edge of primaryEdges.slice(0, MAX_PRIMARY_NEIGHBORS)) addEdge(edge)
+
+    const internalEdges = graph.edges
+      .filter((edge) => visibleNodeIds.has(edge.start_id) && visibleNodeIds.has(edge.end_id))
+      .sort(compareEdges)
+    for (const edge of internalEdges) addEdge(edge)
+
+    let secondaryAdded = 0
+    const secondaryEdges = graph.edges
+      .filter((edge) => {
+        const startVisible = visibleNodeIds.has(edge.start_id)
+        const endVisible = visibleNodeIds.has(edge.end_id)
+        return startVisible !== endVisible
+      })
+      .sort(compareEdges)
+    for (const edge of secondaryEdges) {
+      if (secondaryAdded >= MAX_SECONDARY_EDGES) break
+      if (addEdge(edge)) secondaryAdded += 1
+    }
+  }
+
+  if (visibleEdgeIds.size === 0) {
+    for (const edge of [...graph.edges].sort(compareEdges)) addEdge(edge)
+  }
+
+  if (visibleNodeIds.size === 0 && selectedNodeId) visibleNodeIds.add(selectedNodeId)
+
+  const visibleNodes = graph.nodes.filter((node) => visibleNodeIds.has(node.id))
+  const visibleEdges = graph.edges.filter(
+    (edge) => visibleEdgeIds.has(edge.id) && visibleNodeIds.has(edge.start_id) && visibleNodeIds.has(edge.end_id),
+  )
+
+  return {
+    graph: { nodes: visibleNodes, edges: visibleEdges },
+    hiddenEdges: Math.max(0, totalEdges - visibleEdges.length),
+    hiddenNodes: Math.max(0, totalNodes - visibleNodes.length),
+    totalEdges,
+    totalNodes,
+  }
 }
 
 function graphFromEntity(entity: Entity): GraphResponse {
@@ -231,6 +337,29 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function timeValue(value: unknown): number {
+  if (typeof value !== 'string') return 0
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function compareEdges(left: GraphResponse['edges'][number], right: GraphResponse['edges'][number]): number {
+  const countDelta = numberValue(right.properties.count) - numberValue(left.properties.count)
+  if (countDelta !== 0) return countDelta
+
+  const timeDelta = timeValue(right.properties.last_seen) - timeValue(left.properties.last_seen)
+  if (timeDelta !== 0) return timeDelta
+
+  const typeDelta = right.type.localeCompare(left.type)
+  if (typeDelta !== 0) return typeDelta
+
+  return left.id.localeCompare(right.id)
+}
+
 function buildPositions(graph: GraphResponse | null, selectedEntityId: string | null): Record<string, { x: number; y: number }> {
   if (!graph || graph.nodes.length === 0) return {}
 
@@ -284,21 +413,32 @@ function buildPositions(graph: GraphResponse | null, selectedEntityId: string | 
 
   for (const [level, ids] of [...rings.entries()].sort((left, right) => left[0] - right[0])) {
     if (level === 0) continue
-    const count = ids.length
-    const baseRadius = 180 + (level - 1) * 170
-    const radius = Math.max(baseRadius, (count * 145) / (2 * Math.PI))
-    const angleOffset = level % 2 === 0 ? Math.PI / count : Math.PI / 2
+    const ringSize = level === 1 ? 18 : 24
+    const baseRadius = 170 + (level - 1) * 210
+    chunk(ids, ringSize).forEach((ringIds, ringIndex) => {
+      const radius = baseRadius + ringIndex * 118
+      const count = ringIds.length
+      const angleOffset = count === 1 ? Math.PI / 2 : (level + ringIndex) % 2 === 0 ? Math.PI / count : Math.PI / 2
 
-    ids.forEach((id, index) => {
-      const angle = angleOffset + (index * 2 * Math.PI) / Math.max(count, 1)
-      positions[id] = {
-        x: Math.cos(angle) * radius,
-        y: Math.sin(angle) * radius,
-      }
+      ringIds.forEach((id, index) => {
+        const angle = angleOffset + (index * 2 * Math.PI) / Math.max(count, 1)
+        positions[id] = {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        }
+      })
     })
   }
 
   return positions
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
+  }
+  return chunks
 }
 
 function compareNodes(left: GraphResponse['nodes'][number] | undefined, right: GraphResponse['nodes'][number] | undefined): number {

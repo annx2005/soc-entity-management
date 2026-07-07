@@ -3,6 +3,7 @@ display_name: Wazuh Alert
 description: Wazuh alert records with rule and agent metadata.
 category: siem
 enabled: true
+public: false
 priority: 100
 match:
   all:
