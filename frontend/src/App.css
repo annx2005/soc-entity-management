@@ -404,12 +404,24 @@
 
 .batch-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
 }
 
 .batch-summary .metric {
   padding: 8px;
+}
+
+.batch-summary .metric-plain {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.batch-summary .metric-plain strong {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .import-preview {

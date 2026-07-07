@@ -1532,11 +1532,13 @@ function Metric({
   mono?: boolean;
 }) {
   return (
-    <div className="metric">
+    <div className={icon ? "metric" : "metric metric-plain"}>
       {icon ? <div className="metric-icon">{icon}</div> : null}
       <div className="metric-copy">
         <span>{label}</span>
-        <strong className={mono ? "metric-value-mono" : undefined}>{value}</strong>
+        <strong className={mono ? "metric-value-mono" : undefined} title={value}>
+          {value}
+        </strong>
         {secondary ? <small>{secondary}</small> : null}
       </div>
     </div>
