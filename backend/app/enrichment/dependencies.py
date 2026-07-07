@@ -9,7 +9,6 @@ from app.enrichment.providers import (
     CompositeEnrichmentProvider,
     IpinfoLiteEnrichmentProvider,
     MalwareBazaarEnrichmentProvider,
-    OfflineJsonEnrichmentProvider,
 )
 from app.enrichment.service import EnrichmentService
 
@@ -47,10 +46,7 @@ def make_enrichment_provider():
                 ),
             ]
         )
-    return OfflineJsonEnrichmentProvider(
-        settings.enrichment_ip_source_path,
-        settings.enrichment_file_hash_source_path,
-    )
+    raise ValueError(f"unsupported enrichment provider mode: {settings.enrichment_provider_mode}")
 
 
 async def close_enrichment_provider(provider: object) -> None:

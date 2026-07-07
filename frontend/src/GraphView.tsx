@@ -1,12 +1,13 @@
 import cytoscape from 'cytoscape'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { Core, ElementDefinition } from 'cytoscape'
 import { Crosshair, MoveDiagonal2 } from 'lucide-react'
-import type { GraphResponse } from './types'
+import type { Entity, GraphResponse } from './types'
 
 type GraphViewProps = {
   graph: GraphResponse | null
   selectedEntityId: string | null
+  selectedEntity?: Entity | null
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -22,14 +23,18 @@ const TYPE_COLORS: Record<string, string> = {
   cloud_resource: '#6a6f25',
 }
 
-export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
+export function GraphView({ graph, selectedEntityId, selectedEntity = null }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
+  const displayGraph = useMemo(
+    () => (graph && graph.nodes.length > 0 ? graph : selectedEntity ? graphFromEntity(selectedEntity) : graph),
+    [graph, selectedEntity],
+  )
 
   useEffect(() => {
     if (!containerRef.current) return
 
-    const elements = toElements(graph)
+    const elements = toElements(displayGraph)
     cyRef.current?.destroy()
 
     const cy = cytoscape({
@@ -118,7 +123,7 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
       ],
       layout: {
         name: 'preset',
-        positions: buildPositions(graph, selectedEntityId),
+        positions: buildPositions(displayGraph, selectedEntityId),
         fit: false,
       },
     })
@@ -148,9 +153,9 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
     }
-  }, [graph, selectedEntityId])
+  }, [displayGraph, selectedEntityId])
 
-  if (!graph || graph.nodes.length === 0) {
+  if (!displayGraph || displayGraph.nodes.length === 0) {
     return <div className="graph-empty">No graph data</div>
   }
 
@@ -169,6 +174,27 @@ export function GraphView({ graph, selectedEntityId }: GraphViewProps) {
       <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
     </div>
   )
+}
+
+function graphFromEntity(entity: Entity): GraphResponse {
+  return {
+    nodes: [
+      {
+        id: entity.id,
+        labels: ['Entity', entity.entity_type],
+        properties: {
+          id: entity.id,
+          tenant_id: entity.tenant_id,
+          entity_type: entity.entity_type,
+          value: entity.value,
+          first_seen: entity.first_seen,
+          last_seen: entity.last_seen,
+          source: entity.source,
+        },
+      },
+    ],
+    edges: [],
+  }
 }
 
 function toElements(graph: GraphResponse | null): ElementDefinition[] {

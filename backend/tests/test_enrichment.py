@@ -11,42 +11,9 @@ from app.enrichment.providers import (
     CompositeEnrichmentProvider,
     IpinfoLiteEnrichmentProvider,
     MalwareBazaarEnrichmentProvider,
-    OfflineJsonEnrichmentProvider,
 )
 from app.enrichment.schemas import EnrichmentResult
 from app.enrichment.service import EnrichmentService, enrichment_cache_key
-
-
-def test_offline_provider_ip_hit_and_miss(tmp_path) -> None:
-    ip_path = tmp_path / "ip.json"
-    hash_path = tmp_path / "hash.json"
-    ip_path.write_text('{"8.8.8.8":{"country":"US","asn":"AS15169","provider":"offline-demo"}}', encoding="utf-8")
-    hash_path.write_text("{}", encoding="utf-8")
-    provider = OfflineJsonEnrichmentProvider(str(ip_path), str(hash_path))
-
-    hit = asyncio.run(provider.lookup(EntityType.IP, "8.8.8.8"))
-    miss = asyncio.run(provider.lookup(EntityType.IP, "1.1.1.1"))
-
-    assert hit is not None
-    assert hit.data["country"] == "US"
-    assert hit.source == "offline-demo"
-    assert miss is None
-
-
-def test_offline_provider_file_hash_lookup_is_case_insensitive(tmp_path) -> None:
-    ip_path = tmp_path / "ip.json"
-    hash_path = tmp_path / "hash.json"
-    ip_path.write_text("{}", encoding="utf-8")
-    hash_path.write_text(
-        '{"DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF":{"reputation":"malicious","provider":"offline-demo"}}',
-        encoding="utf-8",
-    )
-    provider = OfflineJsonEnrichmentProvider(str(ip_path), str(hash_path))
-
-    result = asyncio.run(provider.lookup(EntityType.FILE_HASH, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"))
-
-    assert result is not None
-    assert result.data["reputation"] == "malicious"
 
 
 def test_ipinfo_lite_provider_maps_country_and_asn() -> None:
@@ -139,7 +106,7 @@ def test_enrichment_service_cache_miss_calls_provider_and_sets_ttl() -> None:
     cache = FakeCache()
     provider = FakeProvider(
         {
-            (EntityType.IP, "8.8.8.8"): {"country": "US", "asn": "AS15169", "provider": "offline-demo"},
+            (EntityType.IP, "8.8.8.8"): {"country": "US", "asn": "AS15169", "provider": "test-provider"},
         }
     )
     service = EnrichmentService(provider, cache=cache, ttl_seconds=123)
@@ -163,8 +130,8 @@ def test_enrichment_service_cache_hit_skips_provider() -> None:
             "enrichment:tenant-a:file_hash:deadbeef": EnrichmentResult(
                 entity_type="file_hash",
                 value="deadbeef",
-                data={"reputation": "malicious", "provider": "offline-demo"},
-                source="offline-demo",
+                data={"reputation": "malicious", "provider": "test-provider"},
+                source="test-provider",
                 cache_status="miss",
             )
         }

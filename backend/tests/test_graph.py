@@ -310,6 +310,9 @@ def test_graph_repository_query_plans_use_batch_indexes_and_union() -> None:
     assert "CALL {" in _source(GraphRepository.list_relationships)
     assert "UNION" in _source(GraphRepository.list_relationships)
     assert "db.index.fulltext.queryNodes" in _source(GraphRepository.list_entities)
+    assert "OPTIONAL MATCH path" in _source(GraphRepository.get_graph)
+    assert "RETURN entity, path" in _source(GraphRepository.get_graph)
+    assert 'record.get("entity")' in _source(GraphRepository._paths_to_graph)
 
 
 def test_entities_api_uses_tenant_context_and_returns_404_cross_tenant() -> None:

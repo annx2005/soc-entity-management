@@ -51,10 +51,6 @@
   value: {{ .Values.kafka.groupIds.graph | quote }}
 - name: ENRICHMENT_PROVIDER_MODE
   value: {{ .Values.enrichment.providerMode | quote }}
-- name: ENRICHMENT_IP_SOURCE_PATH
-  value: {{ .Values.enrichment.ipSourcePath | quote }}
-- name: ENRICHMENT_FILE_HASH_SOURCE_PATH
-  value: {{ .Values.enrichment.fileHashSourcePath | quote }}
 - name: ENRICHMENT_IPINFO_TOKEN
   valueFrom:
     secretKeyRef:

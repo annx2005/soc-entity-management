@@ -10,7 +10,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend/app /app/app
 COPY config /app/config
-COPY data/enrichment /data/enrichment
 
 EXPOSE 8000
 

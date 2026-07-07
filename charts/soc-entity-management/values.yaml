@@ -173,9 +173,7 @@ neo4j:
 
 enrichment:
   enabled: true
-  providerMode: offline
-  ipSourcePath: /data/enrichment/ip_enrichment.json
-  fileHashSourcePath: /data/enrichment/file_hash_enrichment.json
+  providerMode: ipinfo_malwarebazaar
   ipinfoBaseUrl: https://api.ipinfo.io/lite
   malwareBazaarUrl: https://mb-api.abuse.ch/api/v1/
   httpTimeoutSeconds: 5

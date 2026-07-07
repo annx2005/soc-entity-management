@@ -628,11 +628,12 @@ class GraphRepository:
         if hops < 1 or hops > 4:
             raise ValueError("hops must be between 1 and 4")
         query = f"""
-        MATCH path = (entity:Entity {{id: $entity_id, tenant_id: $tenant_id}})-[*1..{hops}]-(neighbor:Entity)
+        MATCH (entity:Entity {{id: $entity_id, tenant_id: $tenant_id}})
+        OPTIONAL MATCH path = (entity)-[*1..{hops}]-(neighbor:Entity)
         WHERE neighbor.tenant_id = $tenant_id
           AND all(node IN nodes(path) WHERE node:Entity AND node.tenant_id = $tenant_id)
           AND all(rel IN relationships(path) WHERE rel.tenant_id = $tenant_id)
-        RETURN path
+        RETURN entity, path
         LIMIT $limit
         """
         return await self._paths_to_graph(query, tenant_id=tenant_id, entity_id=entity_id, limit=limit)
@@ -657,7 +658,12 @@ class GraphRepository:
         async with self._driver.session() as session:
             result = await session.run(query, **params)
             async for record in result:
-                path: Path = record["path"]
+                entity = record.get("entity")
+                if entity is not None:
+                    nodes[str(entity.element_id)] = _graph_node(entity)
+                path: Path | None = record["path"]
+                if path is None:
+                    continue
                 for node in path.nodes:
                     nodes[str(node.element_id)] = _graph_node(node)
                 for rel in path.relationships:

@@ -935,6 +935,7 @@ function EntityDetail({
   >({});
   const firstSeen = formatDateParts(entity.first_seen);
   const lastSeen = formatDateParts(entity.last_seen);
+  const graphNodeCount = detail.graph?.nodes.length ? detail.graph.nodes.length : 1;
 
   useEffect(() => {
     setTargetId("");
@@ -1058,7 +1059,7 @@ function EntityDetail({
         <div className="section-head">
           <div>
             <h3>Graph</h3>
-            <span>{detail.graph?.nodes.length ?? 0} nodes</span>
+            <span>{graphNodeCount} nodes</span>
           </div>
           <label className="hop-select">
             <Filter size={15} />
@@ -1076,7 +1077,7 @@ function EntityDetail({
             </select>
           </label>
         </div>
-        <GraphView graph={detail.graph} selectedEntityId={entity.id} />
+        <GraphView graph={detail.graph} selectedEntityId={entity.id} selectedEntity={entity} />
       </section>
 
       <section className="path-section panel">

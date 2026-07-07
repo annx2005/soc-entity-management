@@ -8,7 +8,6 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw"
-ENRICHMENT_DIR = ROOT / "data" / "enrichment"
 
 TENANTS = [
     {
@@ -38,7 +37,6 @@ SHARED_MALWARE_HASH = "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFD
 
 def main() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-    ENRICHMENT_DIR.mkdir(parents=True, exist_ok=True)
 
     all_records: list[dict[str, Any]] = []
     records_by_tenant: dict[str, list[dict[str, Any]]] = {}
@@ -61,10 +59,6 @@ def main() -> None:
 
     for tenant_id, records in records_by_tenant.items():
         _write_jsonl(RAW_DIR / f"fake-{tenant_id}.jsonl", records)
-
-    _write_json(ENRICHMENT_DIR / "ip_enrichment.json", _ip_enrichment())
-    _write_json(ENRICHMENT_DIR / "file_hash_enrichment.json", _file_hash_enrichment())
-
 
 def _host_story(tenant: dict[str, Any], host: dict[str, str], start: datetime, start_counter: int) -> list[dict[str, Any]]:
     user = host["user"]
@@ -327,27 +321,6 @@ def _summary(records_by_tenant: dict[str, list[dict[str, Any]]]) -> dict[str, An
             "file_hashes": [SHARED_MALWARE_HASH],
         },
         "tenants": tenants,
-    }
-
-
-def _ip_enrichment() -> dict[str, dict[str, Any]]:
-    return {
-        "198.51.100.23": {"country": "US", "asn": "AS64501", "reputation": "suspicious", "provider": "offline-demo"},
-        "203.0.113.77": {"country": "SG", "asn": "AS64502", "reputation": "scanner", "provider": "offline-demo"},
-        "140.82.113.3": {"country": "US", "asn": "AS36459", "reputation": "benign", "provider": "offline-demo"},
-        "8.8.8.8": {"country": "US", "asn": "AS15169", "reputation": "benign", "provider": "offline-demo"},
-    }
-
-
-def _file_hash_enrichment() -> dict[str, dict[str, Any]]:
-    return {
-        BENIGN_HASH: {"malware_family": None, "reputation": "benign", "provider": "offline-demo"},
-        LOLBIN_HASH: {"malware_family": None, "reputation": "known_lolbin", "provider": "offline-demo"},
-        SHARED_MALWARE_HASH: {
-            "malware_family": "DemoLoader",
-            "reputation": "malicious",
-            "provider": "offline-demo",
-        },
     }
 
 

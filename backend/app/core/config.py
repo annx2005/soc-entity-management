@@ -40,9 +40,7 @@ class Settings(BaseSettings):
     kafka_dead_letter_topic: str
     kafka_ingestion_group_id: str
     kafka_graph_group_id: str
-    enrichment_provider_mode: str = "offline"
-    enrichment_ip_source_path: str
-    enrichment_file_hash_source_path: str
+    enrichment_provider_mode: str = "ipinfo_malwarebazaar"
     enrichment_ipinfo_token: Optional[str] = None
     enrichment_ipinfo_base_url: str = "https://api.ipinfo.io/lite"
     enrichment_malware_bazaar_auth_key: Optional[str] = None
