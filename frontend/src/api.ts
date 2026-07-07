@@ -121,7 +121,7 @@ export async function findPath(token: string, sourceId: string, targetId: string
 
 export async function ingestFile(
   token: string,
-  input: { file?: File | null; filePath?: string; parserId?: string },
+  input: { file?: File | null; parserId?: string },
 ): Promise<IngestFileResponse> {
   const form = new FormData()
   if (input.parserId) {
@@ -129,8 +129,6 @@ export async function ingestFile(
   }
   if (input.file) {
     form.append('file', input.file)
-  } else if (input.filePath?.trim()) {
-    form.append('file_path', input.filePath.trim())
   }
   return request<IngestFileResponse>(
     '/api/events/ingest-file-async',

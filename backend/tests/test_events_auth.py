@@ -19,7 +19,10 @@ from app.database.session import Base, get_db
 def test_ingest_file_requires_bearer_token() -> None:
     client = events_test_client()
 
-    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
+    response = client.post(
+        "/api/events/ingest-file-async",
+        files={"file": ("events.jsonl", b'{"id":"1"}\n', "application/json")},
+    )
 
     assert response.status_code == 401
 
@@ -27,38 +30,55 @@ def test_ingest_file_requires_bearer_token() -> None:
 def test_ingest_file_rejects_viewer_role() -> None:
     client = events_test_client(context=tenant_context(role="viewer"))
 
-    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
+    response = client.post(
+        "/api/events/ingest-file-async",
+        files={"file": ("events.jsonl", b'{"id":"1"}\n', "application/json")},
+    )
 
     assert response.status_code == 403
     assert response.json()["detail"] == "insufficient role for ingest"
 
 
-def test_ingest_file_allows_analyst_role() -> None:
+def test_ingest_file_allows_analyst_role(monkeypatch) -> None:
+    async def fake_enqueue_jsonl_bytes(db, content, source_name, *, tenant_id, actor, parser_id):
+        return SimpleNamespace(
+            id=7,
+            source_name=source_name,
+            parser_id=parser_id,
+            status="queued",
+            total_records=1,
+            normalized_records=0,
+            error_records=0,
+        )
+
+    monkeypatch.setattr(events_api, "enqueue_jsonl_bytes", fake_enqueue_jsonl_bytes)
     client = events_test_client(context=tenant_context(role="analyst"))
 
-    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
+    response = client.post(
+        "/api/events/ingest-file-async",
+        files={"file": ("events.jsonl", b'{"id":"1"}\n', "application/json")},
+    )
 
-    assert response.status_code == 404
+    assert response.status_code == 200
 
 
 def test_sync_ingest_route_is_removed() -> None:
     client = events_test_client(context=tenant_context(role="analyst"))
 
-    response = client.post("/api/events/ingest-file", data={"file_path": "/missing.jsonl"})
+    response = client.post(
+        "/api/events/ingest-file",
+        files={"file": ("events.jsonl", b'{"id":"1"}\n', "application/json")},
+    )
 
     assert response.status_code == 404
 
 
-def test_ingest_file_requires_input_and_maps_file_not_found(monkeypatch) -> None:
+def test_ingest_file_requires_input() -> None:
     client = events_test_client(context=tenant_context(role="analyst"))
 
     response = client.post("/api/events/ingest-file-async")
     assert response.status_code == 400
-
-    monkeypatch.setattr(events_api, "enqueue_jsonl_path", lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing")))
-    response = client.post("/api/events/ingest-file-async", data={"file_path": "/missing.jsonl"})
-    assert response.status_code == 404
-    assert response.json()["detail"] == "missing"
+    assert response.json()["detail"] == "Provide a file upload"
 
 
 def test_ingest_file_upload_uses_authenticated_actor_and_parser(monkeypatch) -> None:

@@ -20,7 +20,7 @@ import {
   UserRound,
   UserRoundPlus,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import "./App.css";
 import {
@@ -91,6 +91,8 @@ const TYPE_LABELS: Record<string, string> = {
 
 const ENTITY_PAGE_SIZE = 25;
 const AUDIT_PAGE_SIZE = 20;
+const POST_IMPORT_ENTITY_SYNC_INTERVAL_MS = 2000;
+const POST_IMPORT_ENTITY_SYNC_MAX_ATTEMPTS = 45;
 
 function App() {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
@@ -112,17 +114,20 @@ function App() {
   const [auditRefreshKey, setAuditRefreshKey] = useState(0);
   const [graphHops, setGraphHops] = useState(2);
   const [stats, setStats] = useState<EntityTypeCount[]>([]);
+  const postImportSyncTimerRef = useRef<number | null>(null);
+  const postImportSyncAttemptsRef = useRef(0);
 
-  const refreshEntities = useCallback(async () => {
+  const refreshEntities = useCallback(async (options: { pageOverride?: number; showLoading?: boolean } = {}) => {
     if (!token) return;
-    setEntitiesLoading(true);
+    const activePage = options.pageOverride ?? entityPage;
+    if (options.showLoading ?? true) setEntitiesLoading(true);
     setAppError(null);
     try {
       const nextEntities = await listEntities(token, {
         entityType,
         value: valueFilter,
         limit: ENTITY_PAGE_SIZE + 1,
-        offset: entityPage * ENTITY_PAGE_SIZE,
+        offset: activePage * ENTITY_PAGE_SIZE,
       });
       const visibleEntities = nextEntities.slice(0, ENTITY_PAGE_SIZE);
       setEntities(visibleEntities);
@@ -135,21 +140,50 @@ function App() {
     } catch (error) {
       setAppError(messageFrom(error));
     } finally {
-      setEntitiesLoading(false);
+      if (options.showLoading ?? true) setEntitiesLoading(false);
     }
   }, [entityPage, entityType, token, valueFilter]);
 
-  const refreshStats = useCallback(async () => {
+  const refreshStats = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!token) return;
-    setStatsLoading(true);
+    if (options.showLoading ?? true) setStatsLoading(true);
     try {
       setStats(await getEntityTypeCounts(token, valueFilter));
     } catch (error) {
       setAppError(messageFrom(error));
     } finally {
-      setStatsLoading(false);
+      if (options.showLoading ?? true) setStatsLoading(false);
     }
   }, [token, valueFilter]);
+
+  const stopPostImportEntitySync = useCallback(() => {
+    if (postImportSyncTimerRef.current !== null) {
+      window.clearInterval(postImportSyncTimerRef.current);
+      postImportSyncTimerRef.current = null;
+    }
+    postImportSyncAttemptsRef.current = 0;
+  }, []);
+
+  const refreshEntityWorkspaceAfterImport = useCallback(() => {
+    stopPostImportEntitySync();
+    setAuditRefreshKey((key) => key + 1);
+    setEntityPage(0);
+
+    const refreshWorkspace = () => {
+      void refreshStats({ showLoading: false });
+      void refreshEntities({ pageOverride: 0, showLoading: false });
+    };
+
+    refreshWorkspace();
+    postImportSyncTimerRef.current = window.setInterval(() => {
+      postImportSyncAttemptsRef.current += 1;
+      if (postImportSyncAttemptsRef.current >= POST_IMPORT_ENTITY_SYNC_MAX_ATTEMPTS) {
+        stopPostImportEntitySync();
+        return;
+      }
+      refreshWorkspace();
+    }, POST_IMPORT_ENTITY_SYNC_INTERVAL_MS);
+  }, [refreshEntities, refreshStats, stopPostImportEntitySync]);
 
   useEffect(() => {
     if (!token) {
@@ -187,6 +221,8 @@ function App() {
   useEffect(() => {
     if (context) void refreshStats();
   }, [context, refreshStats]);
+
+  useEffect(() => stopPostImportEntitySync, [stopPostImportEntitySync]);
 
   useEffect(() => {
     if (!token || !selectedEntityId) {
@@ -232,6 +268,7 @@ function App() {
   const statItems = useMemo(() => buildStats(stats), [stats]);
 
   function handleLogout() {
+    stopPostImportEntitySync();
     clearStoredToken();
     setToken(null);
     setContext(null);
@@ -343,15 +380,7 @@ function App() {
 
             <ImportDataPanel
               token={token}
-              onFinished={() => {
-                setAuditRefreshKey((key) => key + 1);
-                void refreshStats();
-                if (entityPage === 0) {
-                  void refreshEntities();
-                } else {
-                  setEntityPage(0);
-                }
-              }}
+              onFinished={refreshEntityWorkspaceAfterImport}
             />
 
             <div className="stats-grid">

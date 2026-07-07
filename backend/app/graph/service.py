@@ -103,9 +103,13 @@ class GraphService:
         self._repository = repository
         self._enrichment_service = enrichment_service
         self._audit_logger = audit_logger
+        self._schema_ready = False
 
     async def ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
         await self._repository.ensure_schema()
+        self._schema_ready = True
 
     async def process_event(self, event: OCSFEvent) -> GraphIngestResult:
         results = await self.process_events_batch([event])
@@ -116,17 +120,20 @@ class GraphService:
         if not events:
             return []
         try:
-            await self._repository.ensure_schema()
+            await self.ensure_schema()
             await self._upsert_events(events)
 
             entities_by_event: dict[str, list[Entity]] = {}
+            for event in events:
+                entities_by_event[event.event_id] = extract_entities(event)
+
+            if self._enrichment_service is not None:
+                entities_by_event = await self._enrich_entities_by_event(events, entities_by_event)
+
             all_entities: list[Entity] = []
             observations: list[tuple[OCSFEvent, Entity]] = []
             for event in events:
-                entities = extract_entities(event)
-                if self._enrichment_service is not None:
-                    entities = await self._enrichment_service.enrich_entities(event.tenant_id, entities)
-                entities_by_event[event.event_id] = entities
+                entities = entities_by_event[event.event_id]
                 all_entities.extend(entities)
                 observations.extend((event, entity) for entity in entities)
 
@@ -197,6 +204,27 @@ class GraphService:
             for event in events:
                 record_graph_event(event.tenant_id, "error")
             raise
+
+    async def _enrich_entities_by_event(
+        self,
+        events: list[OCSFEvent],
+        entities_by_event: dict[str, list[Entity]],
+    ) -> dict[str, list[Entity]]:
+        if self._enrichment_service is None:
+            return entities_by_event
+
+        grouped: dict[str, list[tuple[str, int, Entity]]] = {}
+        tenant_by_event = {event.event_id: event.tenant_id for event in events}
+        for event_id, entities in entities_by_event.items():
+            tenant_id = tenant_by_event[event_id]
+            for index, entity in enumerate(entities):
+                grouped.setdefault(tenant_id, []).append((event_id, index, entity))
+
+        for tenant_id, entries in grouped.items():
+            enriched = await self._enrichment_service.enrich_entities(tenant_id, [entry[2] for entry in entries])
+            for (event_id, index, _), entity in zip(entries, enriched):
+                entities_by_event[event_id][index] = entity
+        return entities_by_event
 
     async def _upsert_events(self, events: list[OCSFEvent]) -> None:
         method = getattr(self._repository, "upsert_events", None)

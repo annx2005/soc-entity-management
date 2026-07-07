@@ -4,7 +4,6 @@ import io
 import json
 from collections.abc import Iterable
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TextIO
 
 from sqlalchemy import select
@@ -109,14 +108,6 @@ def ingest_jsonl_stream(
     db.commit()
     db.refresh(batch)
     return batch
-
-
-def ingest_jsonl_path(db: Session, file_path: str, tenant_id: str = "default", actor: str = "system") -> IngestionBatch:
-    path = Path(file_path).expanduser().resolve()
-    with path.open("r", encoding="utf-8") as stream:
-        return ingest_jsonl_stream(db, stream, str(path), tenant_id=tenant_id, actor=actor)
-
-
 def ingest_jsonl_bytes(db: Session, content: bytes, source_name: str, tenant_id: str = "default", actor: str = "system") -> IngestionBatch:
     text = content.decode("utf-8")
     return ingest_jsonl_stream(db, io.StringIO(text), source_name, tenant_id=tenant_id, actor=actor)

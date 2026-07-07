@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import TenantContext, get_tenant_context
 from app.database.session import get_db
 from app.ingestion.schemas import ErrorRecordResponse, IngestFileResponse, NormalizedEventResponse
-from app.ingestion.kafka_service import enqueue_jsonl_bytes, enqueue_jsonl_path
+from app.ingestion.kafka_service import enqueue_jsonl_bytes
 from app.ingestion.service import get_batch, list_errors, list_normalized_events_page
 
 router = APIRouter(prefix="/api/events", tags=["events"])
@@ -18,21 +18,21 @@ router = APIRouter(prefix="/api/events", tags=["events"])
 async def ingest_file_async(
     context: Annotated[TenantContext, Depends(get_tenant_context)],
     db: Annotated[Session, Depends(get_db)],
-    file_path: Annotated[Optional[str], Form()] = None,
     file: Annotated[Optional[UploadFile], File()] = None,
     parser_id: Annotated[Optional[str], Form()] = None,
 ) -> IngestFileResponse:
     tenant_id = _ingest_tenant_id_or_forbidden(context)
-    if file is None and not file_path:
-        raise HTTPException(status_code=400, detail="Provide either file_path or file upload")
-    try:
-        if file is not None:
-            content = await file.read()
-            batch = await enqueue_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id, actor=context.email, parser_id=parser_id)
-        else:
-            batch = await enqueue_jsonl_path(db, file_path or "", tenant_id=tenant_id, actor=context.email, parser_id=parser_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if file is None:
+        raise HTTPException(status_code=400, detail="Provide a file upload")
+    content = await file.read()
+    batch = await enqueue_jsonl_bytes(
+        db,
+        content,
+        file.filename or "uploaded.jsonl",
+        tenant_id=tenant_id,
+        actor=context.email,
+        parser_id=parser_id,
+    )
 
     return IngestFileResponse(
         batch_id=batch.id,

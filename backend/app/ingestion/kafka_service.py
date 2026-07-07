@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Iterator, Optional, Protocol, TextIO
 
 from pydantic import BaseModel
@@ -23,18 +22,6 @@ from app.normalization.schemas import UnsupportedEventError
 class EventPublisher(Protocol):
     async def send(self, topic: str, payload: BaseModel, key: Optional[str] = None, headers: Optional[dict[str, str]] = None) -> None:
         ...
-
-
-async def enqueue_jsonl_path(
-    db: Session,
-    file_path: str,
-    publisher: Optional[EventPublisher] = None,
-    tenant_id: str = "default",
-    actor: str = "system",
-    parser_id: str | None = None,
-) -> IngestionBatch:
-    path = Path(file_path).expanduser().resolve()
-    return await enqueue_jsonl_bytes(db, path.read_bytes(), str(path), publisher=publisher, tenant_id=tenant_id, actor=actor, parser_id=parser_id)
 
 
 async def enqueue_jsonl_bytes(

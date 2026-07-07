@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from time import perf_counter
 
 from app.entities.schemas import Entity, EntityType
@@ -10,6 +11,7 @@ from app.observability.metrics import record_enrichment_lookup
 
 
 ENRICHABLE_TYPES = {EntityType.IP, EntityType.FILE_HASH}
+ENRICHMENT_CONCURRENCY = 8
 
 
 class EnrichmentService:
@@ -29,13 +31,26 @@ class EnrichmentService:
     async def enrich_entities(self, tenant_id: str, entities: list[Entity]) -> list[Entity]:
         if not self._enabled:
             return entities
-        enriched: list[Entity] = []
-        for entity in entities:
+
+        enriched: list[Entity | None] = [None] * len(entities)
+        enrichable: list[tuple[int, Entity]] = []
+        for index, entity in enumerate(entities):
             if entity.type not in ENRICHABLE_TYPES:
-                enriched.append(entity)
+                enriched[index] = entity
                 continue
-            enriched.append(await self._enrich_entity(tenant_id, entity))
-        return enriched
+            enrichable.append((index, entity))
+
+        if enrichable:
+            semaphore = asyncio.Semaphore(ENRICHMENT_CONCURRENCY)
+
+            async def enrich_one(index: int, entity: Entity) -> tuple[int, Entity]:
+                async with semaphore:
+                    return index, await self._enrich_entity(tenant_id, entity)
+
+            for index, entity in await asyncio.gather(*(enrich_one(index, entity) for index, entity in enrichable)):
+                enriched[index] = entity
+
+        return [entity for entity in enriched if entity is not None]
 
     async def _enrich_entity(self, tenant_id: str, entity: Entity) -> Entity:
         started = perf_counter()
