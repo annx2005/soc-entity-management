@@ -1,7 +1,7 @@
 import cytoscape from 'cytoscape'
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Core, ElementDefinition } from 'cytoscape'
-import { Crosshair, MoveDiagonal2 } from 'lucide-react'
+import { Crosshair, Eye, EyeOff, Maximize2, Minimize2, MoveDiagonal2 } from 'lucide-react'
 import type { Entity, GraphResponse } from './types'
 
 type GraphViewProps = {
@@ -17,6 +17,8 @@ type RenderableGraph = {
   totalEdges: number
   totalNodes: number
 }
+
+type GraphMode = 'focused' | 'all'
 
 const MAX_RENDER_NODES = 72
 const MAX_RENDER_EDGES = 90
@@ -38,11 +40,20 @@ const TYPE_COLORS: Record<string, string> = {
 export function GraphView({ graph, selectedEntityId, selectedEntity = null }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const cyRef = useRef<Core | null>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [graphMode, setGraphMode] = useState<GraphMode>('focused')
   const displayGraph = useMemo(
     () => (graph && graph.nodes.length > 0 ? graph : selectedEntity ? graphFromEntity(selectedEntity) : graph),
     [graph, selectedEntity],
   )
-  const renderableGraph = useMemo(() => limitGraph(displayGraph, selectedEntityId), [displayGraph, selectedEntityId])
+  const renderableGraph = useMemo(
+    () => (graphMode === 'all' ? fullGraph(displayGraph) : limitGraph(displayGraph, selectedEntityId)),
+    [displayGraph, graphMode, selectedEntityId],
+  )
+
+  useEffect(() => {
+    setGraphMode('focused')
+  }, [displayGraph, selectedEntityId])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -159,27 +170,76 @@ export function GraphView({ graph, selectedEntityId, selectedEntity = null }: Gr
       }
     })
 
-    cy.fit(undefined, 56)
+    cy.fit(undefined, isFullscreen ? 72 : 56)
     cyRef.current = cy
 
     return () => {
       cy.destroy()
       if (cyRef.current === cy) cyRef.current = null
     }
-  }, [renderableGraph.graph, selectedEntityId])
+  }, [isFullscreen, renderableGraph.graph, selectedEntityId])
+
+  useEffect(() => {
+    if (!isFullscreen) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsFullscreen(false)
+    }
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isFullscreen])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    let firstFrame = 0
+    let secondFrame = 0
+    const resizeGraph = () => {
+      window.cancelAnimationFrame(firstFrame)
+      window.cancelAnimationFrame(secondFrame)
+      firstFrame = window.requestAnimationFrame(() => {
+        secondFrame = window.requestAnimationFrame(() => {
+          const cy = cyRef.current
+          if (!cy) return
+          cy.resize()
+          cy.fit(undefined, isFullscreen ? 72 : 56)
+        })
+      })
+    }
+
+    const observer = new ResizeObserver(resizeGraph)
+    observer.observe(container)
+    window.addEventListener('resize', resizeGraph)
+    resizeGraph()
+
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', resizeGraph)
+      window.cancelAnimationFrame(firstFrame)
+      window.cancelAnimationFrame(secondFrame)
+    }
+  }, [isFullscreen, renderableGraph.graph])
 
   if (!renderableGraph.graph || renderableGraph.graph.nodes.length === 0) {
     return <div className="graph-empty">No graph data</div>
   }
 
   const hasHiddenGraphItems = renderableGraph.hiddenNodes > 0 || renderableGraph.hiddenEdges > 0
+  const hasFullGraphOption = Boolean(displayGraph && (displayGraph.nodes.length > MAX_RENDER_NODES || displayGraph.edges.length > MAX_RENDER_EDGES))
 
   return (
-    <div className="graph-shell">
-      {hasHiddenGraphItems ? (
+    <div className={`graph-shell ${isFullscreen ? 'fullscreen' : ''}`}>
+      {hasHiddenGraphItems || graphMode === 'all' ? (
         <div className="graph-density">
           <strong>
-            {renderableGraph.graph.nodes.length}/{renderableGraph.totalNodes} nodes
+            {graphMode === 'all' ? 'All' : 'Focus'} · {renderableGraph.graph.nodes.length}/{renderableGraph.totalNodes} nodes
           </strong>
           <span>
             {renderableGraph.graph.edges.length}/{renderableGraph.totalEdges} relationships
@@ -195,10 +255,45 @@ export function GraphView({ graph, selectedEntityId, selectedEntity = null }: Gr
           <Crosshair size={14} />
           <span>Center</span>
         </button>
+        {hasFullGraphOption ? (
+          <button
+            type="button"
+            className="ghost-button graph-tool"
+            onClick={() => setGraphMode((current) => (current === 'all' ? 'focused' : 'all'))}
+            aria-pressed={graphMode === 'all'}
+          >
+            {graphMode === 'all' ? <EyeOff size={14} /> : <Eye size={14} />}
+            <span>{graphMode === 'all' ? 'Focus' : 'Show all'}</span>
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="ghost-button graph-tool"
+          onClick={() => setIsFullscreen((current) => !current)}
+          aria-pressed={isFullscreen}
+        >
+          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          <span>{isFullscreen ? 'Exit' : 'Full screen'}</span>
+        </button>
       </div>
-      <div ref={containerRef} className="graph-canvas" aria-label="Entity relationship graph" />
+      <div
+        key={isFullscreen ? 'fullscreen-canvas' : 'normal-canvas'}
+        ref={containerRef}
+        className="graph-canvas"
+        aria-label="Entity relationship graph"
+      />
     </div>
   )
+}
+
+function fullGraph(graph: GraphResponse | null): RenderableGraph {
+  return {
+    graph,
+    hiddenEdges: 0,
+    hiddenNodes: 0,
+    totalEdges: graph?.edges.length ?? 0,
+    totalNodes: graph?.nodes.length ?? 0,
+  }
 }
 
 function limitGraph(graph: GraphResponse | null, selectedEntityId: string | null): RenderableGraph {
