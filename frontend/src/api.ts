@@ -8,6 +8,8 @@ import type {
   IngestFileResponse,
   LoginResponse,
   NormalizedEvent,
+  ParserPreviewResponse,
+  ParserSummary,
   Relationship,
   TenantContext,
 } from './types'
@@ -119,9 +121,12 @@ export async function findPath(token: string, sourceId: string, targetId: string
 
 export async function ingestFile(
   token: string,
-  input: { file?: File | null; filePath?: string },
+  input: { file?: File | null; filePath?: string; parserId?: string },
 ): Promise<IngestFileResponse> {
   const form = new FormData()
+  if (input.parserId) {
+    form.append('parser_id', input.parserId)
+  }
   if (input.file) {
     form.append('file', input.file)
   } else if (input.filePath?.trim()) {
@@ -132,6 +137,24 @@ export async function ingestFile(
     {
       method: 'POST',
       body: form,
+    },
+    token,
+  )
+}
+
+export async function listParsers(token: string): Promise<ParserSummary[]> {
+  return request<ParserSummary[]>('/api/parsers', undefined, token)
+}
+
+export async function previewParser(
+  token: string,
+  input: { parserId?: string; record: Record<string, unknown> },
+): Promise<ParserPreviewResponse> {
+  return request<ParserPreviewResponse>(
+    '/api/parsers/preview',
+    {
+      method: 'POST',
+      body: JSON.stringify({ parser_id: input.parserId ?? 'auto', record: input.record }),
     },
     token,
   )

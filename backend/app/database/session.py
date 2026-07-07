@@ -51,6 +51,7 @@ def _ensure_postgres_schema_extras() -> None:
         "ALTER TABLE accounts ALTER COLUMN created_at SET DEFAULT now()",
         "ALTER TABLE accounts ALTER COLUMN updated_at SET DEFAULT now()",
         "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(255)",
+        "ALTER TABLE ingestion_batches ADD COLUMN IF NOT EXISTS parser_id VARCHAR(100)",
         "ALTER TABLE audit_logs ALTER COLUMN actor SET DEFAULT 'system'",
         "ALTER TABLE audit_logs ALTER COLUMN created_at SET DEFAULT now()",
         "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_created_at ON audit_logs(tenant_id, created_at)",
@@ -92,6 +93,9 @@ def _ensure_sqlite_schema_extras() -> None:
         audit_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(audit_logs)"))}
         if "tenant_id" not in audit_columns:
             connection.execute(text("ALTER TABLE audit_logs ADD COLUMN tenant_id VARCHAR(255)"))
+        batch_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(ingestion_batches)"))}
+        if "parser_id" not in batch_columns:
+            connection.execute(text("ALTER TABLE ingestion_batches ADD COLUMN parser_id VARCHAR(100)"))
         for statement in [
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_created_at ON audit_logs(tenant_id, created_at)",
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant_action ON audit_logs(tenant_id, action)",

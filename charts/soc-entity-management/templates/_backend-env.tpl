@@ -79,4 +79,6 @@
   value: {{ .Values.monitoring.enabled | quote }}
 - name: METRICS_PORT
   value: {{ .Values.monitoring.workerMetricsPort | quote }}
+- name: PARSER_CONFIG_DIR
+  value: "/app/config/parsers"
 {{- end -}}

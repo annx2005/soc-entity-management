@@ -89,10 +89,23 @@ export type GraphResponse = {
 export type IngestFileResponse = {
   batch_id: number
   source_name: string
+  parser_id: string | null
   status: string
   total_records: number
   normalized_records: number
   error_records: number
+}
+
+export type ParserSummary = {
+  id: string
+  display_name: string
+  category: string
+  description: string | null
+}
+
+export type ParserPreviewResponse = {
+  parser_id: string | null
+  ocsf_event: Record<string, unknown>
 }
 
 export type NormalizedEvent = {

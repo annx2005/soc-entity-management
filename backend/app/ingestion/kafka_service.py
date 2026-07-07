@@ -4,7 +4,7 @@ import io
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Protocol, TextIO
+from typing import Iterator, Optional, Protocol, TextIO
 
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -31,10 +31,10 @@ async def enqueue_jsonl_path(
     publisher: Optional[EventPublisher] = None,
     tenant_id: str = "default",
     actor: str = "system",
+    parser_id: str | None = None,
 ) -> IngestionBatch:
     path = Path(file_path).expanduser().resolve()
-    with path.open("r", encoding="utf-8") as stream:
-        return await enqueue_jsonl_stream(db, stream, str(path), publisher=publisher, tenant_id=tenant_id, actor=actor)
+    return await enqueue_jsonl_bytes(db, path.read_bytes(), str(path), publisher=publisher, tenant_id=tenant_id, actor=actor, parser_id=parser_id)
 
 
 async def enqueue_jsonl_bytes(
@@ -44,9 +44,10 @@ async def enqueue_jsonl_bytes(
     publisher: Optional[EventPublisher] = None,
     tenant_id: str = "default",
     actor: str = "system",
+    parser_id: str | None = None,
 ) -> IngestionBatch:
-    text = content.decode("utf-8")
-    return await enqueue_jsonl_stream(db, io.StringIO(text), source_name, publisher=publisher, tenant_id=tenant_id, actor=actor)
+    text = _decode_log_content(content)
+    return await enqueue_jsonl_stream(db, io.StringIO(text), source_name, publisher=publisher, tenant_id=tenant_id, actor=actor, parser_id=parser_id)
 
 
 async def enqueue_jsonl_stream(
@@ -56,8 +57,10 @@ async def enqueue_jsonl_stream(
     publisher: Optional[EventPublisher] = None,
     tenant_id: str = "default",
     actor: str = "system",
+    parser_id: str | None = None,
 ) -> IngestionBatch:
-    batch = IngestionBatch(source_name=source_name, status="publishing")
+    parser_id = normalize_empty(parser_id)
+    batch = IngestionBatch(source_name=source_name, parser_id=parser_id, status="publishing")
     db.add(batch)
     db.flush()
     record_audit_log(
@@ -67,10 +70,10 @@ async def enqueue_jsonl_stream(
         actor=actor,
         target_type="ingestion_batch",
         target_id=str(batch.id),
-        metadata={"source_name": source_name, "mode": "async"},
+        metadata={"source_name": source_name, "mode": "async", "parser_id": parser_id},
     )
 
-    job = JobStatus(batch_id=batch.id, job_type="kafka_publish_raw_events", status="running", details={"source_name": source_name})
+    job = JobStatus(batch_id=batch.id, job_type="kafka_publish_raw_events", status="running", details={"source_name": source_name, "parser_id": parser_id})
     db.add(job)
     db.commit()
     db.refresh(batch)
@@ -84,16 +87,13 @@ async def enqueue_jsonl_stream(
     total_records = 0
     settings = get_settings()
     try:
-        for line_number, raw_line in enumerate(stream, start=1):
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-
+        for line_number, raw_line in _iter_json_records(stream.read()):
             total_records += 1
             message = RawEventMessage(
                 batch_id=batch.id,
                 tenant_id=tenant_id,
                 source_name=source_name,
+                parser_id=parser_id,
                 line_number=line_number,
                 raw_line=raw_line,
             )
@@ -106,6 +106,7 @@ async def enqueue_jsonl_stream(
                     "batch_id": str(batch.id),
                     "tenant_id": tenant_id,
                     "source_name": source_name,
+                    "parser_id": parser_id or "",
                 },
             )
 
@@ -113,7 +114,7 @@ async def enqueue_jsonl_stream(
         batch.total_records = total_records
         batch.status = _batch_status_after_publish(batch)
         job.status = "completed"
-        job.details = {"source_name": source_name, "published_records": total_records}
+        job.details = {"source_name": source_name, "parser_id": parser_id, "published_records": total_records}
         job.updated_at = datetime.now(timezone.utc)
         record_audit_log(
             db,
@@ -122,7 +123,7 @@ async def enqueue_jsonl_stream(
             actor=actor,
             target_type="ingestion_batch",
             target_id=str(batch.id),
-            metadata={"source_name": source_name, "mode": "async", "published_records": total_records},
+            metadata={"source_name": source_name, "mode": "async", "parser_id": parser_id, "published_records": total_records},
         )
         db.commit()
         db.refresh(batch)
@@ -131,7 +132,7 @@ async def enqueue_jsonl_stream(
         db.add(batch)
         batch.status = "failed"
         job.status = "failed"
-        job.details = {"source_name": source_name, "published_records": total_records, "error": str(exc)}
+        job.details = {"source_name": source_name, "parser_id": parser_id, "published_records": total_records, "error": str(exc)}
         job.updated_at = datetime.now(timezone.utc)
         record_audit_log(
             db,
@@ -140,7 +141,7 @@ async def enqueue_jsonl_stream(
             actor=actor,
             target_type="ingestion_batch",
             target_id=str(batch.id),
-            metadata={"source_name": source_name, "mode": "async", "published_records": total_records, "error": str(exc)},
+            metadata={"source_name": source_name, "mode": "async", "parser_id": parser_id, "published_records": total_records, "error": str(exc)},
         )
         db.commit()
         raise
@@ -176,7 +177,7 @@ async def process_raw_event_messages(
         try:
             record = json.loads(message.raw_line)
             raw_tenant_id = _declared_raw_tenant_id(record)
-            event = _with_trusted_tenant(normalize_event(record), message.tenant_id, raw_tenant_id)
+            event = _with_trusted_tenant(normalize_event(record, parser_id=message.parser_id, source_hint=message.source_name), message.tenant_id, raw_tenant_id)
             _record_tenant_mismatch_audit(db, message, event.event_id, raw_tenant_id)
         except json.JSONDecodeError as exc:
             dead_letters.append(_dead_letter_message(message, "json_parse_error", str(exc)))
@@ -396,3 +397,37 @@ def _batch_status_after_publish(batch: IngestionBatch) -> str:
     if processed > 0:
         return "running"
     return "queued"
+
+
+def _decode_log_content(content: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return content.decode("utf-8")
+
+
+def _iter_json_records(text: str) -> Iterator[tuple[int, str]]:
+    stripped = text.strip()
+    if not stripped:
+        return
+
+    if stripped[0] in {"[", "{"}:
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, list):
+            for index, record in enumerate(payload, start=1):
+                if isinstance(record, dict):
+                    yield index, json.dumps(record, ensure_ascii=False)
+            return
+        if isinstance(payload, dict):
+            yield 1, json.dumps(payload, ensure_ascii=False)
+            return
+
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        raw_line = raw_line.strip()
+        if raw_line:
+            yield line_number, raw_line

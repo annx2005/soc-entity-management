@@ -29,8 +29,16 @@ spec:
           {{- end }}
           env:
             {{- include "soc.backendEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: parser-config
+              mountPath: /app/config/parsers
+              readOnly: true
           resources:
             {{- toYaml .Values.workers.resources | nindent 12 }}
+      volumes:
+        - name: parser-config
+          configMap:
+            name: {{ include "soc.fullname" . }}-parsers
 {{- if .Values.monitoring.enabled }}
 ---
 apiVersion: v1

@@ -89,6 +89,7 @@
 .filters input,
 .filters select,
 .import-form input:not([type="checkbox"]),
+.import-form select,
 .path-form input,
 .path-form select,
 .hop-select select {

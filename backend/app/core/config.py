@@ -6,7 +6,18 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+ROOT_DIR = Path(__file__).resolve().parents[3]
+ROOT_ENV_FILE = ROOT_DIR / ".env"
+
+
+def _default_parser_config_dir() -> str:
+    for candidate in (
+        Path("/app/config/parsers"),
+        ROOT_DIR / "config" / "parsers",
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return str(ROOT_DIR / "config" / "parsers")
 
 
 class Settings(BaseSettings):
@@ -41,6 +52,7 @@ class Settings(BaseSettings):
     enrichment_enabled: bool
     metrics_enabled: bool = True
     metrics_port: int = 9100
+    parser_config_dir: str = _default_parser_config_dir()
     ingestion_db_batch_size: int = 1000
     graph_batch_size: int = 500
     graph_batch_max_wait_seconds: float = 2.0

@@ -1,0 +1,118 @@
+id: sysmon
+display_name: Sysmon
+description: PowerShell-exported Microsoft-Windows-Sysmon JSON events.
+category: edr
+enabled: true
+priority: 90
+match:
+  all:
+    - equals:
+        path: ProviderName
+        value: Microsoft-Windows-Sysmon
+    - in:
+        path: Id
+        values: [1, 3, 11, 22]
+ocsf:
+  event_id:
+    hash_paths: [TimeCreated, Id, Message]
+  time:
+    first:
+      - path: Message
+        transforms: ["message_field:UtcTime", normalize_empty]
+      - path: TimeCreated
+        transforms: [dotnet_json_date, normalize_empty]
+  tenant_id:
+    path: tenant_id
+    transforms: [normalize_empty]
+  source_name:
+    value: sysmon
+  event_type:
+    path: Id
+    transforms: [sysmon_event_type]
+  class_uid:
+    path: Id
+    transforms: [sysmon_class_uid]
+  class_name:
+    path: Id
+    transforms: [sysmon_class_name]
+  category_uid:
+    path: Id
+    transforms: [sysmon_category_uid]
+  category_name:
+    path: Id
+    transforms: [sysmon_category_name]
+  activity_id:
+    path: Id
+    transforms: [sysmon_activity_id]
+  activity_name:
+    path: Id
+    transforms: [sysmon_activity_name]
+  severity_id:
+    value: 1
+  fields:
+    actor.user.name:
+      path: Message
+      transforms: ["message_field:User", normalize_empty]
+    device.hostname:
+      first:
+        - path: Computer
+          transforms: [normalize_empty]
+        - path: MachineName
+          transforms: [normalize_empty]
+    process.name:
+      path: Message
+      transforms: ["message_field:Image", process_name]
+    process.cmd_line:
+      path: Message
+      transforms: ["message_field:CommandLine", normalize_empty]
+    process.file.path:
+      path: Message
+      transforms: ["message_field:Image", normalize_empty]
+    process.file.name:
+      path: Message
+      transforms: ["message_field:Image", process_name]
+    process.file.hashes:
+      path: Message
+      transforms: ["message_field:Hashes", sha256_hashes]
+    file.path:
+      first:
+        - path: Message
+          transforms: ["message_field:TargetFilename", normalize_empty]
+        - path: Message
+          transforms: ["message_field:Image", normalize_empty]
+    file.name:
+      first:
+        - path: Message
+          transforms: ["message_field:TargetFilename", process_name]
+        - path: Message
+          transforms: ["message_field:Image", process_name]
+    file.hashes:
+      path: Message
+      transforms: ["message_field:Hashes", sha256_hashes]
+    src_endpoint.ip:
+      path: Message
+      transforms: ["message_field:SourceIp", normalize_empty]
+    dst_endpoint.ip:
+      path: Message
+      transforms: ["message_field:DestinationIp", normalize_empty]
+    query.hostname:
+      path: Message
+      transforms: ["message_field:QueryName", normalize_domain]
+  unmapped:
+    windows_event_id:
+      path: Id
+      transforms: [string]
+    provider_name:
+      path: ProviderName
+    process_guid:
+      path: Message
+      transforms: ["message_field:ProcessGuid", normalize_empty]
+    process_id:
+      path: Message
+      transforms: ["message_field:ProcessId", normalize_empty]
+    protocol:
+      path: Message
+      transforms: ["message_field:Protocol", normalize_empty]
+    query_results:
+      path: Message
+      transforms: ["message_field:QueryResults", normalize_empty]

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 class IngestFileResponse(BaseModel):
     batch_id: int
     source_name: str
+    parser_id: Optional[str] = None
     status: str
     total_records: int
     normalized_records: int

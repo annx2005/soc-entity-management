@@ -1,0 +1,62 @@
+id: wazuh-alert
+display_name: Wazuh Alert
+description: Wazuh alert records with rule and agent metadata.
+category: siem
+enabled: true
+priority: 100
+match:
+  all:
+    - exists: rule
+    - exists: agent.name
+ocsf:
+  event_id:
+    path: id
+    transforms: [normalize_empty]
+  time:
+    path: timestamp
+  tenant_id:
+    path: tenant_id
+    transforms: [normalize_empty]
+  source_name:
+    value: wazuh
+  event_type:
+    value: wazuh_alert
+  class_uid:
+    value: 2001
+  class_name:
+    value: Security Finding
+  category_uid:
+    value: 2
+  category_name:
+    value: Findings
+  activity_id:
+    value: 1
+  activity_name:
+    value: Create
+  severity_id:
+    path: rule.level
+    transforms: [severity_id]
+  fields:
+    device.hostname:
+      path: agent.name
+      transforms: [normalize_empty]
+    src_endpoint.ip:
+      path: agent.ip
+      transforms: [normalize_empty]
+    finding.uid:
+      path: rule.id
+      transforms: [string]
+    finding.title:
+      path: rule.description
+      transforms: [normalize_empty]
+    finding.desc:
+      path: rule.description
+      transforms: [normalize_empty]
+    finding.severity_id:
+      path: rule.level
+      transforms: [severity_id]
+  unmapped:
+    rule_groups:
+      path: rule.groups
+    mitre_ids:
+      path: rule.mitre.id

@@ -17,6 +17,7 @@ class RawEventMessage(BaseModel):
     batch_id: int
     tenant_id: str = "default"
     source_name: str
+    parser_id: Optional[str] = None
     line_number: int
     raw_line: str
     published_at: datetime = Field(default_factory=utc_now)

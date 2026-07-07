@@ -33,10 +33,12 @@ services:
       NEO4J_USER: ${DOCKER_NEO4J_USER}
       NEO4J_PASSWORD: ${DOCKER_NEO4J_PASSWORD}
       KAFKA_BOOTSTRAP_SERVERS: ${DOCKER_KAFKA_BOOTSTRAP_SERVERS}
+      PARSER_CONFIG_DIR: /app/config/parsers
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend/app:/app/app
+      - ./config:/app/config:ro
       - ./data:/data:ro
       - ./wazuh-archives.jsonl:/wazuh-archives.jsonl:ro
     depends_on:
@@ -64,8 +66,10 @@ services:
       NEO4J_USER: ${DOCKER_NEO4J_USER}
       NEO4J_PASSWORD: ${DOCKER_NEO4J_PASSWORD}
       KAFKA_BOOTSTRAP_SERVERS: ${DOCKER_KAFKA_BOOTSTRAP_SERVERS}
+      PARSER_CONFIG_DIR: /app/config/parsers
     volumes:
       - ./backend/app:/app/app
+      - ./config:/app/config:ro
       - ./data:/data:ro
       - ./wazuh-archives.jsonl:/wazuh-archives.jsonl:ro
     depends_on:

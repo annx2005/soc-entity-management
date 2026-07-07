@@ -20,6 +20,7 @@ async def ingest_file_async(
     db: Annotated[Session, Depends(get_db)],
     file_path: Annotated[Optional[str], Form()] = None,
     file: Annotated[Optional[UploadFile], File()] = None,
+    parser_id: Annotated[Optional[str], Form()] = None,
 ) -> IngestFileResponse:
     tenant_id = _ingest_tenant_id_or_forbidden(context)
     if file is None and not file_path:
@@ -27,15 +28,16 @@ async def ingest_file_async(
     try:
         if file is not None:
             content = await file.read()
-            batch = await enqueue_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id, actor=context.email)
+            batch = await enqueue_jsonl_bytes(db, content, file.filename or "uploaded.jsonl", tenant_id=tenant_id, actor=context.email, parser_id=parser_id)
         else:
-            batch = await enqueue_jsonl_path(db, file_path or "", tenant_id=tenant_id, actor=context.email)
+            batch = await enqueue_jsonl_path(db, file_path or "", tenant_id=tenant_id, actor=context.email, parser_id=parser_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return IngestFileResponse(
         batch_id=batch.id,
         source_name=batch.source_name,
+        parser_id=batch.parser_id,
         status=batch.status,
         total_records=batch.total_records,
         normalized_records=batch.normalized_records,
@@ -81,6 +83,7 @@ def get_ingestion_batch(
     return IngestFileResponse(
         batch_id=batch.id,
         source_name=batch.source_name,
+        parser_id=batch.parser_id,
         status=batch.status,
         total_records=batch.total_records,
         normalized_records=batch.normalized_records,

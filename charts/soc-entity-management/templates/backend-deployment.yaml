@@ -26,6 +26,10 @@ spec:
               containerPort: {{ .Values.backend.port }}
           env:
             {{- include "soc.backendEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: parser-config
+              mountPath: /app/config/parsers
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -40,3 +44,7 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
+      volumes:
+        - name: parser-config
+          configMap:
+            name: {{ include "soc.fullname" . }}-parsers

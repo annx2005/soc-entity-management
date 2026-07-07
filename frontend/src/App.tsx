@@ -36,6 +36,7 @@ import {
   listAuditLogs,
   listIngestErrors,
   listEntities,
+  listParsers,
   listRelationshipEvidence,
   listRelationships,
   listNormalizedEvents,
@@ -55,6 +56,7 @@ import type {
   IngestErrorRecord,
   IngestFileResponse,
   NormalizedEvent,
+  ParserSummary,
   Relationship,
   TenantContext,
 } from "./types";
@@ -661,6 +663,8 @@ type ImportDataPanelProps = {
 function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
 
   const [file, setFile] = useState<File | null>(null);
+  const [parserId, setParserId] = useState("");
+  const [parsers, setParsers] = useState<ParserSummary[]>([]);
   const [result, setResult] = useState<IngestFileResponse | null>(null);
   const [normalized, setNormalized] = useState<NormalizedEvent[]>([]);
   const [errors, setErrors] = useState<IngestErrorRecord[]>([]);
@@ -692,6 +696,23 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
       setLogsLoading(false);
     }
   }, [result?.batch_id, token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listParsers(token)
+      .then((nextParsers) => {
+        if (!cancelled) {
+          setParsers(nextParsers);
+          setParserId((current) => current || nextParsers[0]?.id || "");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setParsers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     if (!result || result.status === "completed" || result.status === "failed")
@@ -738,11 +759,15 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
       setError("Choose a file to upload.");
       return;
     }
+    if (!parserId) {
+      setError("Choose a parser.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
     try {
-      const nextResult = await ingestFile(token, { file });
+      const nextResult = await ingestFile(token, { file, parserId });
       setResult(nextResult);
       await loadBatchPreview(nextResult.batch_id);
       if (nextResult.status === "completed" || nextResult.status === "failed") {
@@ -763,7 +788,7 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
           <span>
             {result
               ? `Batch ${result.batch_id} · ${result.status}`
-              : "JSONL log file queued through Kafka"}
+              : "JSON or JSONL log file queued through Kafka"}
           </span>
         </div>
         <button
@@ -794,7 +819,17 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
 
             }}
           />
-          <span>{file ? file.name : "Upload JSONL file"}</span>
+          <span>{file ? file.name : "Upload JSON or JSONL file"}</span>
+        </label>
+        <label className="parser-picker">
+          <Braces size={15} />
+          <select value={parserId} onChange={(event) => setParserId(event.target.value)}>
+            {parsers.map((parser) => (
+              <option value={parser.id} key={parser.id}>
+                {parser.display_name}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="import-actions">
           <button
@@ -817,6 +852,7 @@ function ImportDataPanel({ token, onFinished }: ImportDataPanelProps) {
           <Metric label="Records" value={String(result.total_records)} />
           <Metric label="Ready" value={String(result.normalized_records)} />
           <Metric label="Errors" value={String(result.error_records)} />
+          <Metric label="Parser" value={result.parser_id ?? "-"} />
         </div>
       ) : null}
 

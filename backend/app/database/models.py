@@ -131,6 +131,7 @@ class IngestionBatch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    parser_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="running")
     total_records: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     normalized_records: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
