@@ -259,11 +259,11 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [graphHops, selectedEntityId, token]);
+  }, [entities, graphHops, selectedEntityId, token]);
 
   const selectedEntity =
-    detail.entity ??
     entities.find((entity) => entity.id === selectedEntityId) ??
+    detail.entity ??
     null;
   const statItems = useMemo(() => buildStats(stats), [stats]);
 
